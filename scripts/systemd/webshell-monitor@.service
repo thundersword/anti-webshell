@@ -1,0 +1,16 @@
+[Unit]
+Description=Webshell Real-time Monitor for site %i
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/webshell_monitor
+ExecStart=/opt/webshell_monitor/webshell_monitor.sh --site %i
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

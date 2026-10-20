@@ -1,0 +1,104 @@
+import os
+from pathlib import Path
+
+import pytest
+
+os.environ["WEBSHELL_DRY_RUN"] = "1"
+os.environ["DEFAULT_ADMIN_USER"] = "admin"
+os.environ["DEFAULT_ADMIN_PASSWORD"] = "admin123"
+
+
+@pytest.fixture()
+def client(tmp_path):
+    db_path = tmp_path / "test.db"
+    config_root = tmp_path / "sites"
+    config_root.mkdir()
+    scripts = Path(__file__).resolve().parents[2] / "scripts"
+
+    os.environ["DATABASE_URL"] = f"sqlite:///{db_path}"
+    os.environ["WEBSHELL_CONFIG_ROOT"] = str(config_root)
+    os.environ["WEBSHELL_INSTALL_DIR"] = str(scripts)
+    os.environ["WEBSHELL_DRY_RUN"] = "1"
+
+    from app import create_app
+    from app.config import Config
+
+    class TestConfig(Config):
+        SQLALCHEMY_DATABASE_URI = f"sqlite:///{db_path}"
+        WEBSHELL_DRY_RUN = True
+        WEBSHELL_CONFIG_ROOT = str(config_root)
+        WEBSHELL_INSTALL_DIR = str(scripts)
+        TESTING = True
+
+    app = create_app(TestConfig)
+    with app.test_client() as c:
+        yield c
+
+
+def _login(client):
+    resp = client.post("/api/auth/login", json={"username": "admin", "password": "admin123"})
+    assert resp.status_code == 200
+    token = resp.get_json()["access_token"]
+    return {"Authorization": f"Bearer {token}"}
+
+
+def test_login_and_health(client):
+    assert client.get("/api/health").status_code == 200
+    headers = _login(client)
+    me = client.get("/api/auth/me", headers=headers)
+    assert me.status_code == 200
+    assert me.get_json()["username"] == "admin"
+
+
+def test_create_site_and_config(client, tmp_path):
+    headers = _login(client)
+    project = tmp_path / "webroot"
+    project.mkdir()
+    (project / "public").mkdir()
+    (project / "public" / "index.php").write_text("<?php", encoding="utf-8")
+
+    resp = client.post(
+        "/api/sites",
+        headers=headers,
+        json={
+            "site_id": "blog",
+            "name": "Blog",
+            "project_dir": str(project),
+            "profile": "thinkphp",
+            "start": False,
+        },
+    )
+    assert resp.status_code == 201, resp.get_data(as_text=True)
+    body = resp.get_json()
+    assert body["site_id"] == "blog"
+    assert body["node_id"] == "local"
+    assert len(body["critical_files"]) >= 1
+
+    files = client.get("/api/config/critical-files?site_id=blog", headers=headers)
+    assert files.status_code == 200
+    assert isinstance(files.get_json(), list)
+
+    profiles = client.get("/api/profiles", headers=headers)
+    assert profiles.status_code == 200
+    names = [p["name"] for p in profiles.get_json()["profiles"]]
+    assert "thinkphp" in names
+    assert "laravel" in names
+
+
+def test_service_status_dry_run(client, tmp_path):
+    headers = _login(client)
+    project = tmp_path / "site2"
+    project.mkdir()
+    client.post(
+        "/api/sites",
+        headers=headers,
+        json={
+            "site_id": "s2",
+            "project_dir": str(project),
+            "profile": "plain_php",
+            "start": False,
+        },
+    )
+    st = client.get("/api/service/status?site_id=s2", headers=headers)
+    assert st.status_code == 200
+    assert st.get_json()["status"] in ("stopped", "running", "unknown")

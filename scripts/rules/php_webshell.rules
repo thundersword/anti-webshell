@@ -1,0 +1,13 @@
+# One regex per line (grep -E). Lines starting with # are comments.
+eval\s*\(
+base64_decode.*eval
+system\s*\(
+exec\s*\(
+shell_exec\s*\(
+passthru\s*\(
+\$_(GET|POST|REQUEST)\[.*\].*eval
+assert\s*\(.*\$
+create_function
+call_user_func
+preg_replace.*\/e
+phpinfo\s*\(
