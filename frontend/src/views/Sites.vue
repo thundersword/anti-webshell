@@ -39,20 +39,27 @@
           <el-input v-model="form.name" />
         </el-form-item>
         <el-form-item label="项目目录" required>
-          <el-input v-model="form.project_dir" placeholder="/www/wwwroot/blog" />
+          <el-input v-model="form.project_dir" placeholder="/www/wwwroot/blog">
+            <template #append>
+              <el-button :loading="detecting" @click="detectFramework">探测框架</el-button>
+            </template>
+          </el-input>
         </el-form-item>
         <el-form-item label="框架 Profile">
-          <el-select v-model="form.profile" style="width: 100%" @change="onProfileChange">
+          <el-select v-model="form.profile" style="width: 100%" filterable>
             <el-option
               v-for="p in profiles"
               :key="p.name"
-              :label="p.name"
+              :label="p.label || p.name"
               :value="p.name"
             />
           </el-select>
         </el-form-item>
         <el-form-item label="告警邮箱">
           <el-input v-model="form.alert_email" />
+        </el-form-item>
+        <el-form-item label="锁定关键文件">
+          <el-switch v-model="form.lock_critical_files" />
         </el-form-item>
         <el-form-item label="创建后启动">
           <el-switch v-model="form.start" />
@@ -85,13 +92,15 @@ export default {
     const siteStore = useSiteStore()
     const loading = ref(false)
     const saving = ref(false)
+    const detecting = ref(false)
     const dialogVisible = ref(false)
     const form = ref({
       site_id: '',
       name: '',
       project_dir: '',
-      profile: 'thinkphp',
+      profile: 'thinkphp5',
       alert_email: '',
+      lock_critical_files: true,
       start: true
     })
 
@@ -101,7 +110,7 @@ export default {
     const profileHint = computed(() => {
       const p = profiles.value.find((x) => x.name === form.value.profile)
       if (!p) return ''
-      return `将预填关键文件 ${p.critical_files.length} 个、白名单 ${p.whitelist_dirs.length} 个（可在配置页修改）`
+      return `${p.label || p.name}：预填关键文件 ${p.critical_files.length} 个、白名单 ${p.whitelist_dirs.length} 个；将排除 .git / vendor / runtime 等热目录`
     })
 
     const loadSites = async () => {
@@ -124,14 +133,32 @@ export default {
         site_id: '',
         name: '',
         project_dir: '',
-        profile: 'thinkphp',
+        profile: 'thinkphp5',
         alert_email: '',
+        lock_critical_files: true,
         start: true
       }
       dialogVisible.value = true
     }
 
-    const onProfileChange = () => {}
+    const detectFramework = async () => {
+      if (!form.value.project_dir) {
+        ElMessage.warning('请先填写项目目录')
+        return
+      }
+      detecting.value = true
+      try {
+        const data = await api.get('/profiles/detect', {
+          params: { project_dir: form.value.project_dir }
+        })
+        if (data.profile) {
+          form.value.profile = data.profile
+        }
+        ElMessage.success(`${data.display_name || data.profile}（${data.confidence}）：${data.reason}`)
+      } finally {
+        detecting.value = false
+      }
+    }
 
     const createSite = async () => {
       if (!form.value.site_id || !form.value.project_dir) {
@@ -180,8 +207,9 @@ export default {
       dialogVisible,
       form,
       profileHint,
+      detecting,
       openCreate,
-      onProfileChange,
+      detectFramework,
       createSite,
       selectSite,
       removeSite

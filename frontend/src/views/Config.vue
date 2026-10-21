@@ -77,6 +77,26 @@
         </el-card>
       </el-tab-pane>
       
+      <el-tab-pane label="防护策略" name="protect">
+        <el-card>
+          <el-form label-width="160px" style="max-width: 640px">
+            <el-form-item label="自动恢复">
+              <el-switch v-model="protect.auto_restore" @change="saveProtect" />
+              <span class="hint">关键文件被改后从备份写回</span>
+            </el-form-item>
+            <el-form-item label="锁定关键文件">
+              <el-switch v-model="protect.lock_critical_files" @change="saveProtect" />
+              <span class="hint">chattr +i，Web 进程无法改写（发版前请先解锁）</span>
+            </el-form-item>
+            <el-form-item label="立即操作">
+              <el-button type="primary" :loading="lockBusy" @click="doLock(true)">立即锁定</el-button>
+              <el-button :loading="lockBusy" @click="doLock(false)">发版解锁</el-button>
+            </el-form-item>
+          </el-form>
+          <pre class="lock-status">{{ lockStatusText || '尚未查询锁定状态' }}</pre>
+        </el-card>
+      </el-tab-pane>
+
       <el-tab-pane label="告警配置" name="alert">
         <el-card>
           <template #header>
@@ -121,6 +141,12 @@ export default {
     const criticalFiles = ref([])
     const whitelistDirs = ref([])
     const alertConfigs = ref([])
+    const protect = ref({
+      auto_restore: true,
+      lock_critical_files: true
+    })
+    const lockBusy = ref(false)
+    const lockStatusText = ref('')
     
     const loadCriticalFiles = async () => {
       try {
@@ -191,6 +217,46 @@ export default {
       loadWhitelistDirs()
     }
     
+    const loadProtect = async () => {
+      if (!currentSiteId.value) return
+      try {
+        const data = await api.get(`/sites/${currentSiteId.value}`)
+        protect.value.auto_restore = !!data.auto_restore
+        protect.value.lock_critical_files = data.lock_critical_files !== false
+        const st = await api.get('/service/lock-status')
+        lockStatusText.value = st.status || ''
+      } catch (error) {
+        // ignore
+      }
+    }
+
+    const saveProtect = async () => {
+      if (!currentSiteId.value) return
+      try {
+        await api.put(`/sites/${currentSiteId.value}`, {
+          auto_restore: protect.value.auto_restore,
+          lock_critical_files: protect.value.lock_critical_files
+        })
+        ElMessage.success('防护策略已保存')
+        loadProtect()
+      } catch (error) {
+        ElMessage.error('保存失败')
+      }
+    }
+
+    const doLock = async (lock) => {
+      lockBusy.value = true
+      try {
+        await api.post(lock ? '/service/lock' : '/service/unlock')
+        ElMessage.success(lock ? '已锁定关键文件' : '已解锁，可以发版')
+        loadProtect()
+      } catch (error) {
+        ElMessage.error(lock ? '锁定失败' : '解锁失败')
+      } finally {
+        lockBusy.value = false
+      }
+    }
+
     const handleToggleAlert = async (row) => {
       try {
         await api.put(`/config/alert-config/${row.id}`, { enabled: row.enabled })
@@ -214,6 +280,7 @@ export default {
       loadCriticalFiles()
       loadWhitelistDirs()
       loadAlertConfigs()
+      loadProtect()
     }
 
     watch(currentSiteId, reloadAll)
@@ -231,7 +298,12 @@ export default {
       handleAddWhitelistDir,
       handleDeleteWhitelistDir,
       handleToggleAlert,
-      getAlertTypeName
+      getAlertTypeName,
+      protect,
+      lockBusy,
+      lockStatusText,
+      saveProtect,
+      doLock
     }
   }
 }
@@ -242,6 +314,21 @@ export default {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+.hint {
+  margin-left: 12px;
+  color: #909399;
+  font-size: 13px;
+}
+
+.lock-status {
+  margin-top: 12px;
+  padding: 12px;
+  background: #1e1e1e;
+  color: #d4d4d4;
+  font-size: 12px;
+  white-space: pre-wrap;
 }
 </style>
 

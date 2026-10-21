@@ -17,6 +17,7 @@ class SiteRuntimeConfig:
     project_dir: str
     profile: str = "thinkphp"
     auto_restore: bool = True
+    lock_critical_files: bool = True
     alert_email: str = ""
     wechat_webhook: str = ""
     dingtalk_webhook: str = ""

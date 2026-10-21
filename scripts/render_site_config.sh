@@ -10,6 +10,7 @@
 #   --wechat-webhook URL
 #   --dingtalk-webhook URL
 #   --auto-restore true|false
+#   --lock-critical true|false
 #   --output-dir DIR
 #   --critical-file PATH   (repeatable)
 #   --whitelist-dir PATH   (repeatable)
@@ -30,6 +31,7 @@ ALERT_EMAIL=""
 WECHAT_WEBHOOK=""
 DINGTALK_WEBHOOK=""
 AUTO_RESTORE="true"
+LOCK_CRITICAL_FILES="true"
 USE_PROFILE_DEFAULTS=1
 EXTRA_CRITICAL=()
 EXTRA_WHITELIST=()
@@ -44,6 +46,7 @@ Options:
   --wechat-webhook URL
   --dingtalk-webhook URL
   --auto-restore true|false
+  --lock-critical true|false
   --output-dir DIR
   --critical-file PATH
   --whitelist-dir PATH
@@ -65,6 +68,7 @@ while [[ $# -gt 0 ]]; do
         --wechat-webhook) WECHAT_WEBHOOK="$2"; shift 2 ;;
         --dingtalk-webhook) DINGTALK_WEBHOOK="$2"; shift 2 ;;
         --auto-restore) AUTO_RESTORE="$2"; shift 2 ;;
+        --lock-critical) LOCK_CRITICAL_FILES="$2"; shift 2 ;;
         --output-dir) OUTPUT_DIR="$2"; shift 2 ;;
         --critical-file) EXTRA_CRITICAL+=("$2"); shift 2 ;;
         --whitelist-dir) EXTRA_WHITELIST+=("$2"); shift 2 ;;
@@ -157,6 +161,7 @@ LOG_FILE="$LOG_ROOT/${SITE_ID}.log"
 QUARANTINE_DIR="$QUARANTINE_ROOT/$SITE_ID"
 BACKUP_DIR="$BACKUP_ROOT/$SITE_ID"
 AUTO_RESTORE="$AUTO_RESTORE"
+LOCK_CRITICAL_FILES="$LOCK_CRITICAL_FILES"
 ALERT_EMAIL="$ALERT_EMAIL"
 WECHAT_WEBHOOK="$WECHAT_WEBHOOK"
 DINGTALK_WEBHOOK="$DINGTALK_WEBHOOK"

@@ -49,7 +49,25 @@ def create_app(config_object=Config):
     return app
 
 
+def _ensure_schema():
+    from sqlalchemy import inspect, text
+
+    try:
+        insp = inspect(db.engine)
+        if not insp.has_table("sites"):
+            return
+        cols = {c["name"] for c in insp.get_columns("sites")}
+        if "lock_critical_files" not in cols:
+            db.session.execute(
+                text("ALTER TABLE sites ADD COLUMN lock_critical_files BOOLEAN DEFAULT 1")
+            )
+            db.session.commit()
+    except Exception:  # noqa: BLE001
+        db.session.rollback()
+
+
 def _bootstrap(app):
+    _ensure_schema()
     if not Node.query.get("local"):
         db.session.add(Node(id="local", name="Local Host", kind="local"))
         db.session.commit()

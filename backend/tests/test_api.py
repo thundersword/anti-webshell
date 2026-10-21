@@ -72,6 +72,7 @@ def test_create_site_and_config(client, tmp_path):
     body = resp.get_json()
     assert body["site_id"] == "blog"
     assert body["node_id"] == "local"
+    assert body.get("lock_critical_files") is True
     assert len(body["critical_files"]) >= 1
 
     files = client.get("/api/config/critical-files?site_id=blog", headers=headers)
@@ -82,6 +83,9 @@ def test_create_site_and_config(client, tmp_path):
     assert profiles.status_code == 200
     names = [p["name"] for p in profiles.get_json()["profiles"]]
     assert "thinkphp" in names
+    assert "thinkphp3" in names
+    assert "thinkphp5" in names
+    assert "thinkphp6" in names
     assert "laravel" in names
 
 
@@ -133,3 +137,28 @@ def test_events_stats_without_error(client, tmp_path):
     assert st.status_code == 200
     body = st.get_json()
     assert "critical_count" in body
+
+
+def test_detect_thinkphp_versions(client, tmp_path):
+    headers = _login(client)
+
+    tp5 = tmp_path / "tp5"
+    (tp5 / "application").mkdir(parents=True)
+    (tp5 / "thinkphp").mkdir()
+    (tp5 / "thinkphp" / "base.php").write_text("<?php", encoding="utf-8")
+    r = client.get("/api/profiles/detect", headers=headers, query_string={"project_dir": str(tp5)})
+    assert r.status_code == 200
+    assert r.get_json()["profile"] == "thinkphp5"
+
+    tp6 = tmp_path / "tp6"
+    (tp6 / "app").mkdir(parents=True)
+    (tp6 / "config").mkdir()
+    (tp6 / "config" / "app.php").write_text("<?php", encoding="utf-8")
+    r = client.get("/api/profiles/detect", headers=headers, query_string={"project_dir": str(tp6)})
+    assert r.get_json()["profile"] == "thinkphp6"
+
+    tp3 = tmp_path / "tp3"
+    (tp3 / "ThinkPHP").mkdir(parents=True)
+    (tp3 / "ThinkPHP" / "ThinkPHP.php").write_text("<?php", encoding="utf-8")
+    r = client.get("/api/profiles/detect", headers=headers, query_string={"project_dir": str(tp3)})
+    assert r.get_json()["profile"] == "thinkphp3"

@@ -102,6 +102,8 @@ class LocalSystemdExecutor(Executor):
             str(self.config_root),
             "--auto-restore",
             "true" if cfg.auto_restore else "false",
+            "--lock-critical",
+            "true" if cfg.lock_critical_files else "false",
             "--no-profile-defaults",
         ]
         if cfg.alert_email:
@@ -169,6 +171,7 @@ class LocalSystemdExecutor(Executor):
                     f'QUARANTINE_DIR="/var/quarantine/{cfg.site_id}"',
                     f'BACKUP_DIR="/var/webshell_backup/{cfg.site_id}"',
                     f'AUTO_RESTORE="{"true" if cfg.auto_restore else "false"}"',
+                    f'LOCK_CRITICAL_FILES="{"true" if cfg.lock_critical_files else "false"}"',
                     f'ALERT_EMAIL="{cfg.alert_email or ""}"',
                     f'WECHAT_WEBHOOK="{cfg.wechat_webhook or ""}"',
                     f'DINGTALK_WEBHOOK="{cfg.dingtalk_webhook or ""}"',
@@ -230,7 +233,60 @@ class LocalSystemdExecutor(Executor):
         _STATUS_CACHE[site_id] = (now, result)
         return result
 
+    def apply_file_lock(self, site_id: str, lock: bool = True) -> ExecResult:
+        script = self.install_dir / "webshell_monitor.sh"
+        action = "--lock" if lock else "--unlock"
+        if not script.exists():
+            return ExecResult(ok=False, message="monitor script missing")
+        env = os.environ.copy()
+        env["WEBSHELL_CONFIG_ROOT"] = str(self.config_root)
+        if self.dry_run:
+            return ExecResult(
+                ok=True,
+                message="dry-run",
+                data={"locked": lock, "site_id": site_id},
+            )
+        try:
+            proc = subprocess.run(
+                [str(script), "--site", site_id, action],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                check=False,
+                env=env,
+            )
+            return ExecResult(
+                ok=proc.returncode == 0,
+                message="ok" if proc.returncode == 0 else f"exit {proc.returncode}",
+                stdout=proc.stdout or "",
+                stderr=proc.stderr or "",
+                data={"locked": lock, "site_id": site_id},
+            )
+        except Exception as exc:  # noqa: BLE001
+            return ExecResult(ok=False, message=str(exc))
+
+    def lock_status(self, site_id: str) -> ExecResult:
+        script = self.install_dir / "webshell_monitor.sh"
+        if self.dry_run or not script.exists():
+            return ExecResult(ok=True, data={"status": "", "site_id": site_id})
+        env = os.environ.copy()
+        env["WEBSHELL_CONFIG_ROOT"] = str(self.config_root)
+        proc = subprocess.run(
+            [str(script), "--site", site_id, "--lock-status"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+            env=env,
+        )
+        return ExecResult(
+            ok=True,
+            stdout=proc.stdout or "",
+            data={"status": proc.stdout or "", "site_id": site_id},
+        )
+
     def remove_site_config(self, site_id: str) -> ExecResult:
+        self.apply_file_lock(site_id, lock=False)
         self.stop_site(site_id)
         if not self.dry_run:
             self._run(["systemctl", "disable", f"webshell-monitor@{site_id}.service"])

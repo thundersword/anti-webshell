@@ -69,16 +69,39 @@ sudo /opt/webshell_monitor/webshell_monitor.sh --site blog --report
 sudo /opt/webshell_monitor/webshell_monitor.sh --site blog --backup
 sudo /opt/webshell_monitor/webshell_monitor.sh --site blog --list-backups
 sudo /opt/webshell_monitor/webshell_monitor.sh --site blog --restore /path/to/file
+
+# 锁定关键文件（chattr +i，阻止 PHP/Web 改写）
+sudo /opt/webshell_monitor/webshell_monitor.sh --site blog --lock
+sudo /opt/webshell_monitor/webshell_monitor.sh --site blog --lock-status
+# 发版前必须先解锁，发完再锁
+sudo /opt/webshell_monitor/webshell_monitor.sh --site blog --unlock
 ```
+
+## 关键文件锁定
+
+默认对新站点启用 `LOCK_CRITICAL_FILES=true`：对 Profile 中的入口/配置等执行 `chattr +i`。Web 用户无法覆盖这些文件；即便拿到写权限也不会改成功。
+
+注意：
+
+- 需要 ext4/xfs 等支持 immutable 的本地文件系统，以及 root
+- 正常发版会失败，直到 `--unlock`
+- 删除站点时会自动解锁，避免文件永久只读
 
 ## Profile
 
-| Profile | 说明 |
-|---------|------|
-| `thinkphp` | 默认：public/index.php 等 + runtime 白名单 |
-| `laravel` | public/index.php、.env、config/* + storage 白名单 |
-| `wordpress` | wp-config.php 等 + wp-content/cache |
-| `plain_php` | 最小 index.php，可再自定义 |
+| Profile | 说明 | 默认排除（降 I/O） |
+|---------|------|-------------------|
+| `thinkphp3` | ThinkPHP 3.x：`index.php`、`Application/`、`ThinkPHP/` | `.git`、`vendor`、`Application/Runtime`、`ThinkPHP/Library` |
+| `thinkphp5` | ThinkPHP 5.0/5.1：`public/` + `application/` 或 `config/` | `.git`、`vendor`、`runtime`、`thinkphp/library` |
+| `thinkphp6` | ThinkPHP 6.x/8.x：`app/` + `config/`，核心在 vendor | `.git`、`vendor`、`runtime` |
+| `thinkphp` | 兼容名，等同 `thinkphp5` | 同上 |
+| `laravel` | `artisan`、`.env`、`config/` | `.git`、`vendor`、`storage/framework` |
+| `wordpress` | `wp-config.php` 等（仍监控 `uploads` 以防马） | `.git`、`vendor`、cache/upgrade |
+| `plain_php` | 最小 `index.php` | `.git`、`vendor`、cache/tmp |
+
+引擎对 `create` / `moved_to` / `close_write` 监听（不用每次 `write()` 的 `modify`），并跳过 `.git` 等热路径。
+
+GUI 建站时可点「探测框架」，或 CLI 使用对应 profile 名。
 
 ## 从旧版迁移
 

@@ -51,4 +51,4 @@ cd ../frontend && pnpm install && pnpm dev
 | [scripts/MIGRATION.md](scripts/MIGRATION.md) | 旧版单站 → 多站迁移 |
 | [backend/README.md](backend/README.md) | API 与开发运行 |
 
-框架 Profile：`thinkphp` / `laravel` / `wordpress` / `plain_php`。多机扩展点见 backend README（`Executor` + `node_id`）。
+框架 Profile：`thinkphp3` / `thinkphp5` / `thinkphp6`（6 与 8）/ `laravel` / `wordpress` / `plain_php`。多机扩展点见 backend README（`Executor` + `node_id`）。

@@ -74,3 +74,57 @@ def service_logs():
         return jsonify(logs=[])
     result = get_executor_for_node(site.node_id).tail_logs(site.site_id, lines=lines)
     return jsonify(logs=(result.data or {}).get("logs", []))
+
+
+def _lock_executor(site, lock):
+    executor = get_executor_for_node(site.node_id)
+    fn = getattr(executor, "apply_file_lock", None)
+    if not callable(fn):
+        return None, "executor does not support file lock"
+    return fn(site.site_id, lock=lock), None
+
+
+@api_bp.post("/service/lock")
+@jwt_required()
+def service_lock():
+    site = _current_site()
+    if not site:
+        return jsonify(error="请先创建站点"), 400
+    result, err = _lock_executor(site, True)
+    if err:
+        return jsonify(error=err), 500
+    if not result.ok:
+        return jsonify(error=result.message or result.stderr or "锁定失败", detail=result.stdout), 500
+    return jsonify(message="locked", site_id=site.site_id, detail=result.stdout)
+
+
+@api_bp.post("/service/unlock")
+@jwt_required()
+def service_unlock():
+    site = _current_site()
+    if not site:
+        return jsonify(error="请先创建站点"), 400
+    result, err = _lock_executor(site, False)
+    if err:
+        return jsonify(error=err), 500
+    if not result.ok:
+        return jsonify(error=result.message or result.stderr or "解锁失败", detail=result.stdout), 500
+    return jsonify(message="unlocked", site_id=site.site_id, detail=result.stdout)
+
+
+@api_bp.get("/service/lock-status")
+@jwt_required()
+def service_lock_status():
+    site = _current_site()
+    if not site:
+        return jsonify(status="", site_id=None)
+    executor = get_executor_for_node(site.node_id)
+    fn = getattr(executor, "lock_status", None)
+    if not callable(fn):
+        return jsonify(status="", site_id=site.site_id)
+    result = fn(site.site_id)
+    return jsonify(
+        status=(result.data or {}).get("status") or result.stdout or "",
+        site_id=site.site_id,
+        lock_critical_files=bool(getattr(site, "lock_critical_files", False)),
+    )

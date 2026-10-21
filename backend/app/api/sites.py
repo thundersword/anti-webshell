@@ -3,7 +3,8 @@ from flask_jwt_extended import jwt_required
 
 from ..executor import get_executor_for_node
 from ..models import CriticalFile, Site, WhitelistDir, db
-from ..services.site_sync import profile_defaults, sync_site
+from ..services.profiles import detect_profile, profile_defaults
+from ..services.site_sync import sync_site
 from . import api_bp
 
 
@@ -38,7 +39,9 @@ def create_site():
     site_id = (data.get("site_id") or "").strip()
     project_dir = (data.get("project_dir") or "").strip()
     name = (data.get("name") or site_id).strip()
-    profile = (data.get("profile") or "thinkphp").strip()
+    profile = (data.get("profile") or "thinkphp5").strip()
+    if profile in ("auto", "detect", ""):
+        profile = detect_profile(project_dir).get("profile") or "plain_php"
     node_id = (data.get("node_id") or "local").strip()
 
     if not site_id or not project_dir:
@@ -53,6 +56,7 @@ def create_site():
         profile=profile,
         node_id=node_id,
         auto_restore=bool(data.get("auto_restore", True)),
+        lock_critical_files=bool(data.get("lock_critical_files", True)),
         alert_email=data.get("alert_email"),
         wechat_webhook=data.get("wechat_webhook"),
         dingtalk_webhook=data.get("dingtalk_webhook"),
@@ -106,6 +110,8 @@ def update_site(site_id):
             setattr(site, field, data[field])
     if "auto_restore" in data:
         site.auto_restore = bool(data["auto_restore"])
+    if "lock_critical_files" in data:
+        site.lock_critical_files = bool(data["lock_critical_files"])
     if "enabled" in data:
         site.enabled = bool(data["enabled"])
     db.session.commit()

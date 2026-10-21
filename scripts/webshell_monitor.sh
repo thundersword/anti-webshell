@@ -23,8 +23,9 @@ BACKUP_DIR="/var/webshell_backup"
 WECHAT_WEBHOOK=""
 DINGTALK_WEBHOOK=""
 AUTO_RESTORE="true"
+LOCK_CRITICAL_FILES="false"
 DANGEROUS_EXTENSIONS="php|php3|php4|php5|phtml|pht|phps|sh|py|pl|cgi|asp|aspx|jsp|html|htm|shtml"
-INOTIFY_EXCLUDE='(\.git|\.svn)'
+INOTIFY_EXCLUDE='(\.git|\.svn|\.hg|node_modules|/vendor/|/runtime/)'
 CRITICAL_FILES_FILE=""
 WHITELIST_DIRS_FILE=""
 PHP_RULES_FILE="$SCRIPT_HOME/rules/php_webshell.rules"
@@ -120,6 +121,9 @@ init() {
     fi
 
     create_initial_backup
+    if [ "${LOCK_CRITICAL_FILES:-false}" = "true" ]; then
+        lock_all_critical_files
+    fi
 }
 
 #######################################
@@ -193,6 +197,17 @@ is_whitelisted() {
             return 0
         fi
     done
+    return 1
+}
+
+# Cheap path filter if inotify --exclude misses nested files (filename-only match on some versions).
+is_noisy_path() {
+    local file=$1
+    case "$file" in
+        */.git/*|*/.svn/*|*/.hg/*|*/.idea/*|*/node_modules/*|*/vendor/*|*/runtime/*|*/Runtime/*|*/storage/framework/*|*/storage/logs/*|*/bootstrap/cache/*)
+            return 0
+            ;;
+    esac
     return 1
 }
 
@@ -278,6 +293,9 @@ quarantine_file() {
 
 handle_create() {
     local file=$1
+    if is_noisy_path "$file"; then
+        return 0
+    fi
 
     if [[ "$file" =~ \.($DANGEROUS_EXTENSIONS)$ ]]; then
         if ! is_whitelisted "$file"; then
@@ -316,6 +334,82 @@ create_initial_backup() {
     done
 }
 
+file_is_immutable() {
+    local f=$1
+    command -v lsattr >/dev/null 2>&1 || return 1
+    [ -f "$f" ] || return 1
+    local flags
+    flags=$(lsattr -d "$f" 2>/dev/null | awk '{print $1}')
+    [[ "$flags" == *i* ]]
+}
+
+unlock_one_file() {
+    local f=$1
+    [ -f "$f" ] || return 0
+    command -v chattr >/dev/null 2>&1 || return 0
+    chattr -i "$f" 2>/dev/null || true
+}
+
+lock_one_file() {
+    local f=$1
+    if [ ! -f "$f" ]; then
+        return 0
+    fi
+    if ! command -v chattr >/dev/null 2>&1; then
+        log_message "WARNING" "未安装 chattr（e2fsprogs），无法锁定: $f"
+        return 1
+    fi
+    if chattr +i "$f" 2>/dev/null; then
+        log_message "INFO" "已锁定关键文件 (chattr +i): $f"
+        return 0
+    fi
+    log_message "WARNING" "锁定失败（文件系统可能不支持 immutable）: $f"
+    return 1
+}
+
+lock_all_critical_files() {
+    mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
+    local f ok=0 fail=0
+    for f in "${CRITICAL_FILES[@]}"; do
+        if [ -f "$f" ]; then
+            if lock_one_file "$f"; then
+                ok=$((ok + 1))
+            else
+                fail=$((fail + 1))
+            fi
+        fi
+    done
+    log_message "INFO" "关键文件锁定完成: 成功 ${ok}，失败 ${fail}"
+}
+
+unlock_all_critical_files() {
+    mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
+    local f
+    for f in "${CRITICAL_FILES[@]}"; do
+        if [ -f "$f" ]; then
+            unlock_one_file "$f"
+            log_message "INFO" "已解除锁定 (chattr -i): $f"
+        fi
+    done
+}
+
+list_lock_status() {
+    echo "关键文件锁定状态 [site=$SITE_ID]  LOCK_CRITICAL_FILES=${LOCK_CRITICAL_FILES:-false}"
+    echo "----------------------------------------"
+    local f
+    for f in "${CRITICAL_FILES[@]}"; do
+        if [ ! -f "$f" ]; then
+            echo "  缺失  $f"
+            continue
+        fi
+        if file_is_immutable "$f"; then
+            echo "  已锁定  $f"
+        else
+            echo "  未锁定  $f"
+        fi
+    done
+}
+
 # Force refresh backups (overwrite)
 refresh_backups() {
     local critical_file key backup_file
@@ -340,8 +434,12 @@ restore_from_backup() {
         local timestamp tampered_backup
         timestamp=$(date +%Y%m%d_%H%M%S)
         tampered_backup="$QUARANTINE_DIR/tampered_${timestamp}_${key}"
+        unlock_one_file "$file"
         cp -p "$file" "$tampered_backup" 2>/dev/null || true
         cp -p "$backup_file" "$file"
+        if [ "${LOCK_CRITICAL_FILES:-false}" = "true" ]; then
+            lock_one_file "$file"
+        fi
         log_message "CRITICAL" "已从备份自动恢复文件: $file"
         log_message "INFO" "篡改版本已保存: $tampered_backup"
         return 0
@@ -353,6 +451,9 @@ restore_from_backup() {
 
 handle_modify() {
     local file=$1
+    if is_noisy_path "$file"; then
+        return 0
+    fi
     local critical_file
 
     for critical_file in "${CRITICAL_FILES[@]}"; do
@@ -459,17 +560,24 @@ main() {
 
     # Disable set -e for the monitoring loop pipeline
     set +e
+    # Always drop VCS/tooling trees even if a profile omit them.
+    local combined_exclude
+    combined_exclude="(${INOTIFY_EXCLUDE}|\\.git|\\.svn|\\.hg|node_modules)"
+    log_message "INFO" "inotify exclude: $combined_exclude"
+    # close_write instead of modify: one event per save, not per write() syscall.
     inotifywait -m -r \
-        --exclude "$INOTIFY_EXCLUDE" \
-        -e create,modify,moved_to \
+        --exclude "$combined_exclude" \
+        -e create,close_write,moved_to \
         --format '%e %w%f' \
         "$PROJECT_DIR" 2>/dev/null | while read -r event file; do
 
         case "$event" in
-            CREATE|MOVED_TO)
+            *ISDIR*)
+                ;;
+            CREATE|MOVED_TO|CREATE,*)
                 handle_create "$file"
                 ;;
-            MODIFY)
+            CLOSE_WRITE*|MODIFY*)
                 handle_modify "$file"
                 ;;
         esac
@@ -493,6 +601,9 @@ Webshell监控脚本（多站点）
   $0 --site <id> --backup        手动创建/更新关键文件备份
   $0 --site <id> --restore <路径> 手动恢复指定文件
   $0 --site <id> --list-backups  列出所有备份文件
+  $0 --site <id> --lock          对关键文件 chattr +i（阻止修改）
+  $0 --site <id> --unlock        解除关键文件不可变属性（发版前）
+  $0 --site <id> --lock-status   查看关键文件锁定状态
   $0 --help                      显示帮助信息
 
 配置目录: $CONFIG_ROOT/<site_id>.conf
@@ -525,6 +636,18 @@ while [[ $# -gt 0 ]]; do
             ;;
         --list-backups)
             ACTION="list-backups"
+            shift
+            ;;
+        --lock)
+            ACTION="lock"
+            shift
+            ;;
+        --unlock)
+            ACTION="unlock"
+            shift
+            ;;
+        --lock-status)
+            ACTION="lock-status"
             shift
             ;;
         --help|-h)
@@ -571,6 +694,17 @@ case "$ACTION" in
         echo "备份目录: $BACKUP_DIR"
         echo "----------------------------------------"
         ls -lh "$BACKUP_DIR" 2>/dev/null || echo "无备份文件"
+        ;;
+    lock)
+        lock_all_critical_files
+        list_lock_status
+        ;;
+    unlock)
+        unlock_all_critical_files
+        list_lock_status
+        ;;
+    lock-status)
+        list_lock_status
         ;;
     run)
         main

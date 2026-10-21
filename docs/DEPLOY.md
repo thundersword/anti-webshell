@@ -273,6 +273,7 @@ sudo rsync -a --delete dist/ /var/www/webshell-ui/
 - [ ] `WEBSHELL_DRY_RUN=0`
 - [ ] 配置告警（邮件 / 企业微信 / 钉钉）
 - [ ] 定期备份 MySQL（或 sqlite）与 `/var/webshell_backup/`
+- [ ] 关键文件锁定（`chattr +i`）开启后，发版须先 `--unlock` 再 `--lock`
 
 ## 部署顺序小结
 
