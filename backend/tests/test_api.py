@@ -162,3 +162,25 @@ def test_detect_thinkphp_versions(client, tmp_path):
     (tp3 / "ThinkPHP" / "ThinkPHP.php").write_text("<?php", encoding="utf-8")
     r = client.get("/api/profiles/detect", headers=headers, query_string={"project_dir": str(tp3)})
     assert r.get_json()["profile"] == "thinkphp3"
+
+
+def test_lock_dry_run(client, tmp_path):
+    headers = _login(client)
+    project = tmp_path / "locksite"
+    project.mkdir()
+    (project / "index.php").write_text("<?php", encoding="utf-8")
+    client.post(
+        "/api/sites",
+        headers=headers,
+        json={
+            "site_id": "lock1",
+            "project_dir": str(project),
+            "profile": "plain_php",
+            "start": False,
+            "lock_critical_files": True,
+        },
+    )
+    resp = client.post("/api/service/lock?site_id=lock1", headers=headers)
+    assert resp.status_code == 200, resp.get_data(as_text=True)
+    body = resp.get_json()
+    assert body["message"] == "locked"

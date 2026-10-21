@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -233,56 +234,110 @@ class LocalSystemdExecutor(Executor):
         _STATUS_CACHE[site_id] = (now, result)
         return result
 
+    def _critical_file_list(self, site_id: str) -> List[str]:
+        list_file = self.config_root / f"{site_id}.critical"
+        if not list_file.exists():
+            return []
+        paths = []
+        for line in list_file.read_text(encoding="utf-8", errors="replace").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#"):
+                paths.append(line)
+        return paths
+
     def apply_file_lock(self, site_id: str, lock: bool = True) -> ExecResult:
-        script = self.install_dir / "webshell_monitor.sh"
-        action = "--lock" if lock else "--unlock"
-        if not script.exists():
-            return ExecResult(ok=False, message="monitor script missing")
-        env = os.environ.copy()
-        env["WEBSHELL_CONFIG_ROOT"] = str(self.config_root)
+        """Lock/unlock critical files with chattr, without relying on monitor CLI."""
+        paths = self._critical_file_list(site_id)
+        if not paths:
+            return ExecResult(
+                ok=False,
+                message="未找到关键文件列表，请先保存/同步站点配置",
+            )
         if self.dry_run:
+            lines = [f"[dry-run] {'锁定' if lock else '解锁'} {p}" for p in paths]
+            text = "\n".join(lines) + "\n"
             return ExecResult(
                 ok=True,
                 message="dry-run",
-                data={"locked": lock, "site_id": site_id},
+                stdout=text,
+                data={"locked": lock, "site_id": site_id, "files": paths},
             )
-        try:
+        chattr = shutil.which("chattr")
+        if not chattr:
+            return ExecResult(
+                ok=False,
+                message="未找到 chattr，请安装 e2fsprogs，并以 root 运行 API",
+            )
+        flag = "+i" if lock else "-i"
+        ok_n = 0
+        fail_n = 0
+        lines = []
+        for path in paths:
+            p = Path(path)
+            if not p.is_file():
+                lines.append(f"跳过（不存在） {path}")
+                continue
             proc = subprocess.run(
-                [str(script), "--site", site_id, action],
+                [chattr, flag, str(p)],
                 capture_output=True,
                 text=True,
-                timeout=60,
+                timeout=10,
                 check=False,
-                env=env,
             )
+            if proc.returncode == 0:
+                ok_n += 1
+                lines.append(f"{'已锁定' if lock else '已解锁'}  {path}")
+            else:
+                fail_n += 1
+                err = (proc.stderr or proc.stdout or "").strip()
+                lines.append(f"失败  {path}  {err}")
+        text = "\n".join(lines) + "\n"
+        if ok_n == 0:
             return ExecResult(
-                ok=proc.returncode == 0,
-                message="ok" if proc.returncode == 0 else f"exit {proc.returncode}",
-                stdout=proc.stdout or "",
-                stderr=proc.stderr or "",
-                data={"locked": lock, "site_id": site_id},
+                ok=False,
+                message="没有文件锁定成功（需 root，且磁盘支持 immutable）",
+                stdout=text,
+                stderr=text,
             )
-        except Exception as exc:  # noqa: BLE001
-            return ExecResult(ok=False, message=str(exc))
-
-    def lock_status(self, site_id: str) -> ExecResult:
-        script = self.install_dir / "webshell_monitor.sh"
-        if self.dry_run or not script.exists():
-            return ExecResult(ok=True, data={"status": "", "site_id": site_id})
-        env = os.environ.copy()
-        env["WEBSHELL_CONFIG_ROOT"] = str(self.config_root)
-        proc = subprocess.run(
-            [str(script), "--site", site_id, "--lock-status"],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            check=False,
-            env=env,
-        )
         return ExecResult(
             ok=True,
-            stdout=proc.stdout or "",
-            data={"status": proc.stdout or "", "site_id": site_id},
+            message=f"成功 {ok_n}，失败 {fail_n}",
+            stdout=text,
+            data={"locked": lock, "ok": ok_n, "fail": fail_n, "site_id": site_id},
+        )
+
+    def lock_status(self, site_id: str) -> ExecResult:
+        paths = self._critical_file_list(site_id)
+        lines = [f"关键文件锁定状态 [site={site_id}]"]
+        lines.append("----------------------------------------")
+        if self.dry_run:
+            for path in paths:
+                lines.append(f"  (dry-run)  {path}")
+            text = "\n".join(lines) + "\n"
+            return ExecResult(ok=True, stdout=text, data={"status": text, "site_id": site_id})
+        lsattr = shutil.which("lsattr")
+        for path in paths:
+            p = Path(path)
+            if not p.is_file():
+                lines.append(f"  缺失    {path}")
+                continue
+            locked = False
+            if lsattr:
+                proc = subprocess.run(
+                    [lsattr, "-d", str(p)],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    check=False,
+                )
+                flags = (proc.stdout or "").split(" ", 1)[0]
+                locked = "i" in flags
+            lines.append(f"  {'已锁定' if locked else '未锁定'}  {path}")
+        text = "\n".join(lines) + "\n"
+        return ExecResult(
+            ok=True,
+            stdout=text,
+            data={"status": text, "site_id": site_id},
         )
 
     def remove_site_config(self, site_id: str) -> ExecResult:
