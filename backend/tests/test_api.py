@@ -102,3 +102,34 @@ def test_service_status_dry_run(client, tmp_path):
     st = client.get("/api/service/status?site_id=s2", headers=headers)
     assert st.status_code == 200
     assert st.get_json()["status"] in ("stopped", "running", "unknown")
+
+
+def test_tail_n_lines(tmp_path):
+    from app.executor.local import tail_n_lines
+
+    log = tmp_path / "big.log"
+    log.write_text("".join(f"line-{i}\n" for i in range(5000)), encoding="utf-8")
+    lines = tail_n_lines(log, 20)
+    assert len(lines) == 20
+    assert lines[-1] == "line-4999"
+    assert lines[0] == "line-4980"
+
+
+def test_events_stats_without_error(client, tmp_path):
+    headers = _login(client)
+    project = tmp_path / "site3"
+    project.mkdir()
+    client.post(
+        "/api/sites",
+        headers=headers,
+        json={
+            "site_id": "s3",
+            "project_dir": str(project),
+            "profile": "plain_php",
+            "start": False,
+        },
+    )
+    st = client.get("/api/events/stats?site_id=s3", headers=headers)
+    assert st.status_code == 200
+    body = st.get_json()
+    assert "critical_count" in body

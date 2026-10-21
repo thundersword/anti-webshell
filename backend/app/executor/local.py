@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import time
 from pathlib import Path
 from typing import List, Optional
 
@@ -11,6 +12,31 @@ from flask import current_app
 from .base import ExecResult, Executor, SiteRuntimeConfig
 
 SITE_ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]*$")
+_STATUS_CACHE = {}
+_STATUS_TTL = 5.0
+
+
+def tail_n_lines(path, n=100):
+    """Read last n lines without loading the whole file (avoids iowait on large logs)."""
+    n = max(1, min(int(n), 2000))
+    path = Path(path)
+    if not path.exists():
+        return []
+    block = 8192
+    with path.open("rb") as f:
+        f.seek(0, os.SEEK_END)
+        size = f.tell()
+        data = b""
+        while size > 0 and data.count(b"\n") <= n:
+            step = min(block, size)
+            size -= step
+            f.seek(size)
+            data = f.read(step) + data
+            if size == 0:
+                break
+    text = data.decode("utf-8", errors="replace")
+    lines = text.splitlines()
+    return lines[-n:]
 
 
 class LocalSystemdExecutor(Executor):
@@ -156,29 +182,38 @@ class LocalSystemdExecutor(Executor):
         return ExecResult(ok=True, message="config written (direct)")
 
     def start_site(self, site_id: str) -> ExecResult:
+        _STATUS_CACHE.pop(site_id, None)
         r = self._run(["systemctl", "enable", f"webshell-monitor@{site_id}.service"])
         if not r.ok and not self.dry_run:
             return r
         return self._run(["systemctl", "start", f"webshell-monitor@{site_id}.service"])
 
     def stop_site(self, site_id: str) -> ExecResult:
+        _STATUS_CACHE.pop(site_id, None)
         return self._run(["systemctl", "stop", f"webshell-monitor@{site_id}.service"])
 
     def restart_site(self, site_id: str) -> ExecResult:
+        _STATUS_CACHE.pop(site_id, None)
         return self._run(["systemctl", "restart", f"webshell-monitor@{site_id}.service"])
 
     def site_status(self, site_id: str) -> ExecResult:
+        now = time.monotonic()
+        cached = _STATUS_CACHE.get(site_id)
+        if cached and now - cached[0] < _STATUS_TTL:
+            return cached[1]
         if self.dry_run:
-            return ExecResult(
+            result = ExecResult(
                 ok=True,
                 message="dry-run",
                 data={"status": "stopped", "site_id": site_id},
             )
+            _STATUS_CACHE[site_id] = (now, result)
+            return result
         proc = subprocess.run(
             ["systemctl", "is-active", f"webshell-monitor@{site_id}.service"],
             capture_output=True,
             text=True,
-            timeout=15,
+            timeout=5,
             check=False,
         )
         state = (proc.stdout or "").strip() or "unknown"
@@ -187,11 +222,13 @@ class LocalSystemdExecutor(Executor):
             "inactive": "stopped",
             "failed": "error",
         }.get(state, state)
-        return ExecResult(
+        result = ExecResult(
             ok=True,
             message=state,
             data={"status": mapped, "raw": state, "site_id": site_id},
         )
+        _STATUS_CACHE[site_id] = (now, result)
+        return result
 
     def remove_site_config(self, site_id: str) -> ExecResult:
         self.stop_site(site_id)
@@ -219,8 +256,7 @@ class LocalSystemdExecutor(Executor):
             )
         if not log_file.exists():
             return ExecResult(ok=True, data={"logs": []})
-        content = log_file.read_text(encoding="utf-8", errors="replace").splitlines()
-        return ExecResult(ok=True, data={"logs": content[-lines:]})
+        return ExecResult(ok=True, data={"logs": tail_n_lines(log_file, lines)})
 
     def list_quarantine(self, site_id: str) -> ExecResult:
         qdir = Path(f"/var/quarantine/{site_id}")

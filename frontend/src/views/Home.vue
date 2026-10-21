@@ -87,7 +87,7 @@
 </template>
 
 <script>
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import api from '../api/index.js'
 import { useSiteStore } from '../store/site.js'
 import { ElMessage } from 'element-plus'
@@ -163,20 +163,28 @@ export default {
       }
     }
     
-    watch(currentSiteId, () => {
+    let pollTimer = null
+
+    const refresh = () => {
+      if (typeof document !== 'undefined' && document.hidden) return
       loadStats()
       loadServiceStatus()
+    }
+
+    watch(currentSiteId, () => {
+      refresh()
     })
 
     onMounted(() => {
-      loadStats()
-      loadServiceStatus()
-      
-      // 定时刷新
-      setInterval(() => {
-        loadStats()
-        loadServiceStatus()
-      }, 5000)
+      refresh()
+      pollTimer = setInterval(refresh, 15000)
+    })
+
+    onUnmounted(() => {
+      if (pollTimer) {
+        clearInterval(pollTimer)
+        pollTimer = null
+      }
     })
     
     return {

@@ -1,3 +1,4 @@
+# pnpm v12+: approve packages that need postinstall/build scripts
 allowBuilds:
-  esbuild: set this to true or false
-  vue-demi: set this to true or false
+  esbuild: true
+  vue-demi: true

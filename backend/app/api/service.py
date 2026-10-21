@@ -66,7 +66,10 @@ def service_restart():
 @jwt_required()
 def service_logs():
     site = _current_site()
-    lines = int(request.args.get("lines", 100))
+    try:
+        lines = min(max(int(request.args.get("lines", 100)), 1), 500)
+    except (TypeError, ValueError):
+        lines = 100
     if not site:
         return jsonify(logs=[])
     result = get_executor_for_node(site.node_id).tail_logs(site.site_id, lines=lines)

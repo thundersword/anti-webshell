@@ -1,4 +1,5 @@
 import re
+import time
 from datetime import datetime, timedelta
 
 from flask import jsonify, request
@@ -12,10 +13,19 @@ from .sites import _current_site
 LOG_RE = re.compile(
     r"^\[(?P<ts>[^\]]+)\]\s+\[(?P<level>[^\]]+)\](?:\s+\[site=(?P<site>[^\]]+)\])?\s+(?P<msg>.*)$"
 )
+_INGEST_AT = {}
+_INGEST_MIN_INTERVAL = 30
+_STATS_CACHE = {}
+_STATS_TTL = 5.0
 
 
-def _ingest_from_log(site: Site, limit: int = 200):
-    """Best-effort parse engine log into monitor_events."""
+def _ingest_from_log(site: Site, limit: int = 200, force: bool = False):
+    """Best-effort parse engine log into monitor_events (rate-limited)."""
+    now = time.monotonic()
+    last = _INGEST_AT.get(site.site_id, 0)
+    if not force and now - last < _INGEST_MIN_INTERVAL:
+        return
+    _INGEST_AT[site.site_id] = now
     result = get_executor_for_node(site.node_id).tail_logs(site.site_id, lines=limit)
     lines = (result.data or {}).get("logs") or []
     existing = {
@@ -102,11 +112,11 @@ def list_events():
 @jwt_required()
 def event_stats():
     site = _current_site()
-    if site:
-        try:
-            _ingest_from_log(site)
-        except Exception:  # noqa: BLE001
-            pass
+    cache_key = site.site_id if site else "_all"
+    now_mono = time.monotonic()
+    cached = _STATS_CACHE.get(cache_key)
+    if cached and now_mono - cached[0] < _STATS_TTL:
+        return jsonify(cached[1])
 
     q = MonitorEvent.query
     if site:
@@ -114,9 +124,11 @@ def event_stats():
     now = datetime.utcnow()
     today = now.replace(hour=0, minute=0, second=0, microsecond=0)
     week = now - timedelta(days=7)
-    return jsonify(
-        critical_count=q.filter_by(severity="CRITICAL").count(),
-        warning_count=q.filter_by(severity="WARNING").count(),
-        today_count=q.filter(MonitorEvent.created_at >= today).count(),
-        week_count=q.filter(MonitorEvent.created_at >= week).count(),
-    )
+    payload = {
+        "critical_count": q.filter_by(severity="CRITICAL").count(),
+        "warning_count": q.filter_by(severity="WARNING").count(),
+        "today_count": q.filter(MonitorEvent.created_at >= today).count(),
+        "week_count": q.filter(MonitorEvent.created_at >= week).count(),
+    }
+    _STATS_CACHE[cache_key] = (now_mono, payload)
+    return jsonify(payload)

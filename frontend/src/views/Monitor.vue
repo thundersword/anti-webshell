@@ -42,8 +42,11 @@ export default {
     
     const loadLogs = async () => {
       try {
-        const data = await api.get('/service/logs')
-        const lines = data.logs.split('\n').filter(line => line.trim())
+        const data = await api.get('/service/logs', { params: { lines: 200 } })
+        const raw = data.logs
+        const lines = Array.isArray(raw)
+          ? raw.filter((line) => String(line).trim())
+          : String(raw || '').split('\n').filter((line) => line.trim())
         logs.value = lines
         nextTick(() => {
           scrollToBottom()
@@ -63,7 +66,7 @@ export default {
       isWatching.value = !isWatching.value
       
       if (isWatching.value) {
-        logInterval = setInterval(loadLogs, 2000)
+        logInterval = setInterval(loadLogs, 5000)
       } else {
         if (logInterval) {
           clearInterval(logInterval)
