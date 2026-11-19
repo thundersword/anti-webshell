@@ -20,3 +20,6 @@ frontend/package-lock.json
 # Runtime
 /tmp/
 *.log
+
+# Incident samples / local scratch (do not commit malware)
+docs/tmp/
