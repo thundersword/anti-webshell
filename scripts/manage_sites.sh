@@ -9,6 +9,8 @@
 #   manage_sites.sh list-sites
 #   manage_sites.sh start|stop|restart|status <site_id>
 #   manage_sites.sh migrate-legacy <site_id> <project_dir> [profile]
+#   manage_sites.sh ensure-self [--no-lock]
+#   manage_sites.sh lock-self | unlock-self | disable-self [--purge]
 #######################################
 
 set -euo pipefail
@@ -44,6 +46,7 @@ cmd_install() {
 
     cp "$SCRIPT_HOME/webshell_monitor.sh" "$INSTALL_DIR/"
     cp "$SCRIPT_HOME/render_site_config.sh" "$INSTALL_DIR/"
+    cp "$SCRIPT_HOME/render_controlplane.sh" "$INSTALL_DIR/"
     cp "$SCRIPT_HOME/manage_sites.sh" "$INSTALL_DIR/"
     chmod +x "$INSTALL_DIR"/*.sh
 
@@ -113,6 +116,9 @@ EOF
 
     systemctl daemon-reload
     print_msg "安装完成。下一步: $0 add-site <site_id> <project_dir> [profile]"
+    echo ""
+    echo "建议: $0 ensure-self"
+    echo "发布流程: unlock-self → 更新 → lock-self"
 }
 
 cmd_add_site() {
@@ -156,15 +162,94 @@ cmd_remove_site() {
         exit 1
     fi
 
+    if [ "$site_id" = "controlplane" ]; then
+        print_error "controlplane 只能用: $0 disable-self"
+        exit 1
+    fi
+
     systemctl stop "webshell-monitor@${site_id}.service" 2>/dev/null || true
     systemctl disable "webshell-monitor@${site_id}.service" 2>/dev/null || true
 
     rm -f "$CONFIG_ROOT/${site_id}.conf" \
           "$CONFIG_ROOT/${site_id}.critical" \
-          "$CONFIG_ROOT/${site_id}.whitelist"
+          "$CONFIG_ROOT/${site_id}.whitelist" \
+          "$CONFIG_ROOT/${site_id}.watch"
 
     print_msg "已移除站点服务与配置: $site_id"
     print_warning "隔离区/备份未删除: /var/quarantine/$site_id /var/webshell_backup/$site_id"
+}
+
+cmd_ensure_self() {
+    require_root
+    local no_lock=0
+    [[ "${1:-}" == "--no-lock" ]] && no_lock=1
+
+    if [ ! -x "$INSTALL_DIR/webshell_monitor.sh" ]; then
+        print_error "未安装引擎，请先: $0 install"
+        exit 1
+    fi
+
+    if [ -x "$SCRIPT_HOME/render_controlplane.sh" ]; then
+        cp "$SCRIPT_HOME/render_controlplane.sh" "$INSTALL_DIR/" 2>/dev/null || true
+        chmod +x "$INSTALL_DIR/render_controlplane.sh"
+    fi
+
+    if [ ! -x "$INSTALL_DIR/render_controlplane.sh" ]; then
+        print_error "缺少 render_controlplane.sh，请先: $0 install"
+        exit 1
+    fi
+
+    "$INSTALL_DIR/render_controlplane.sh"
+    systemctl enable "webshell-monitor@controlplane.service"
+    systemctl restart "webshell-monitor@controlplane.service"
+    if [ "$no_lock" -eq 0 ]; then
+        cmd_lock_self
+    fi
+    print_warning "请确认 Nginx 对 UI 根目录未启用 PHP（见 docs/DEPLOY.md）"
+    print_msg "控制面自保已启用: controlplane"
+}
+
+cmd_lock_self() {
+    require_root
+    if [ ! -x "$INSTALL_DIR/webshell_monitor.sh" ]; then
+        print_error "未安装引擎，请先: $0 install"
+        exit 1
+    fi
+    "$INSTALL_DIR/webshell_monitor.sh" --site controlplane --lock
+    print_msg "已锁定 controlplane 自保路径"
+}
+
+cmd_unlock_self() {
+    require_root
+    if [ ! -x "$INSTALL_DIR/webshell_monitor.sh" ]; then
+        print_error "未安装引擎，请先: $0 install"
+        exit 1
+    fi
+    "$INSTALL_DIR/webshell_monitor.sh" --site controlplane --unlock
+    print_msg "已解锁 controlplane 自保路径"
+}
+
+cmd_disable_self() {
+    require_root
+    local purge=0
+    [[ "${1:-}" == "--purge" ]] && purge=1
+
+    read -r -p "确认禁用控制面自保 controlplane? 输入 YES: " ans
+    [[ "$ans" == "YES" ]] || { print_error "已取消"; exit 1; }
+
+    cmd_unlock_self || true
+    systemctl stop "webshell-monitor@controlplane.service" 2>/dev/null || true
+    systemctl disable "webshell-monitor@controlplane.service" 2>/dev/null || true
+
+    if [ "$purge" -eq 1 ]; then
+        rm -f "$CONFIG_ROOT/controlplane.conf" \
+              "$CONFIG_ROOT/controlplane.critical" \
+              "$CONFIG_ROOT/controlplane.whitelist" \
+              "$CONFIG_ROOT/controlplane.watch"
+        print_msg "已停用并清除 controlplane 配置"
+    else
+        print_msg "已停用 controlplane 服务（配置保留，可用 ensure-self 恢复）"
+    fi
 }
 
 cmd_list_sites() {
@@ -221,12 +306,19 @@ usage() {
   $0 list-sites
   $0 start|stop|restart|status <site_id>
   $0 migrate-legacy <site_id> <project_dir> [profile]
+  $0 ensure-self [--no-lock]
+  $0 lock-self
+  $0 unlock-self
+  $0 disable-self [--purge]
 
 示例:
   $0 install
   $0 add-site blog /www/wwwroot/blog thinkphp --alert-email admin@example.com
   $0 add-site shop /www/wwwroot/shop laravel
   $0 list-sites
+  $0 ensure-self
+  $0 unlock-self
+  $0 disable-self
 EOF
 }
 
@@ -240,6 +332,10 @@ main() {
         list-sites) cmd_list_sites ;;
         start|stop|restart|status) cmd_svc "$cmd" "$@" ;;
         migrate-legacy) cmd_migrate_legacy "$@" ;;
+        ensure-self) cmd_ensure_self "$@" ;;
+        lock-self) cmd_lock_self ;;
+        unlock-self) cmd_unlock_self ;;
+        disable-self) cmd_disable_self "$@" ;;
         -h|--help|help|"") usage ;;
         *) print_error "未知命令: $cmd"; usage; exit 1 ;;
     esac
