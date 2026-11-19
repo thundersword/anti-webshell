@@ -39,6 +39,8 @@ STRICT_QUARANTINE="false"
 INOTIFY_PIDS=()
 INOTIFY_FIFO=""
 PRINT_WATCH_DIRS=0
+# Relaxed logging: skip hard failures when appending to LOG_FILE (debug CLI only).
+LOG_RELAXED=0
 
 #######################################
 # Config loading
@@ -103,11 +105,30 @@ load_watch_dirs() {
 }
 
 # Flatten relative path for backup filename: public/index.php -> public__index.php
+# Uses longest matching WATCH_DIRS prefix (fallback PROJECT_DIR) for multi-root sites.
 backup_key_for_file() {
     local file=$1
-    local rel="${file#"$PROJECT_DIR"/}"
-    if [ "$rel" = "$file" ]; then
-        rel="$(basename "$file")"
+    local root rel best_len=0 best_root="" pd len
+    pd="${PROJECT_DIR%/}"
+    for root in "${WATCH_DIRS[@]}"; do
+        root="${root%/}"
+        if [[ "$file" == "$root"/* ]] || [ "$file" = "$root" ]; then
+            len=${#root}
+            if [ "$len" -gt "$best_len" ]; then
+                best_len=$len
+                best_root="$root"
+            fi
+        fi
+    done
+    if [ -n "$best_root" ]; then
+        rel="${file#$best_root/}"
+    else
+        rel="${file#"$pd"/}"
+        if [ "$rel" = "$file" ] && [[ "$file" == "$pd"/* ]]; then
+            rel="${file#$pd/}"
+        elif [ "$rel" = "$file" ]; then
+            rel="$(basename "$file")"
+        fi
     fi
     echo "${rel//\//__}"
 }
@@ -159,15 +180,25 @@ init() {
 log_message() {
     local level=$1
     local message=$2
-    mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
     local timestamp
     timestamp=$(date '+%Y-%m-%d %H:%M:%S')
     local prefix="[$timestamp] [$level]"
     if [ -n "${SITE_ID:-}" ]; then
         prefix="[$timestamp] [$level] [site=$SITE_ID]"
     fi
-    echo "$prefix $message" >> "$LOG_FILE" 2>/dev/null || true
     echo "$prefix $message"
+    if [ "${LOG_RELAXED:-0}" = "1" ]; then
+        mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
+        echo "$prefix $message" >> "$LOG_FILE" 2>/dev/null || true
+    else
+        if mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null; then
+            if ! echo "$prefix $message" >> "$LOG_FILE" 2>/dev/null; then
+                echo "警告: 无法写入日志文件: $LOG_FILE" >&2
+            fi
+        else
+            echo "警告: 无法创建日志目录: $(dirname "$LOG_FILE")" >&2
+        fi
+    fi
 }
 
 send_email_alert() {
@@ -231,11 +262,20 @@ is_whitelisted() {
 # Cheap path filter if inotify --exclude misses nested files (filename-only match on some versions).
 is_noisy_path() {
     local file=$1
+    local base="${file##*/}"
     case "$file" in
-        */.git/*|*/.svn/*|*/.hg/*|*/.idea/*|*/node_modules/*|*/vendor/*|*/runtime/*|*/Runtime/*|*/storage/framework/*|*/storage/logs/*|*/bootstrap/cache/*)
+        */.git/*|*/.svn/*|*/.hg/*|*/.idea/*|*/node_modules/*|*/.venv/*|*/__pycache__/*|*/vendor/*|*/runtime/*|*/Runtime/*|*/storage/framework/*|*/storage/logs/*|*/bootstrap/cache/*)
             return 0
             ;;
     esac
+    case "$base" in
+        *.db|*.sqlite|*.sqlite3|*.sqlite-journal|*.sqlite-wal|*.sqlite-shm)
+            return 0
+            ;;
+    esac
+    if [[ "$base" =~ \.sqlite ]]; then
+        return 0
+    fi
     return 1
 }
 
@@ -598,7 +638,7 @@ main() {
     set +e
     # Always drop VCS/tooling trees even if a profile omit them.
     local combined_exclude
-    combined_exclude="(${INOTIFY_EXCLUDE}|\\.git|\\.svn|\\.hg|node_modules|\\.venv|__pycache__)"
+    combined_exclude="(${INOTIFY_EXCLUDE}|\\.git|\\.svn|\\.hg|node_modules|\\.venv|__pycache__|\\.db|\\.sqlite)"
     log_message "INFO" "inotify exclude: $combined_exclude"
     log_message "INFO" "监控根目录: ${WATCH_DIRS[*]}"
     # close_write instead of modify: one event per save, not per write() syscall.
@@ -650,6 +690,11 @@ Webshell监控脚本（多站点）
   $0 --site <id> --unlock        解除关键文件不可变属性（发版前）
   $0 --site <id> --lock-status   查看关键文件锁定状态
   $0 --help                      显示帮助信息
+
+调试（无需 --site）:
+  $0 --print-watch-dirs          解析并输出监控根目录列表（每行一个）
+  $0 --watch-file <列表文件>     覆盖 WATCH_DIRS_FILE（与 --print-watch-dirs 联用）
+  $0 --project-dir <目录>        覆盖 PROJECT_DIR（与 --print-watch-dirs 联用）
 
 配置目录: $CONFIG_ROOT/<site_id>.conf
 systemd:  systemctl start webshell-monitor@<site_id>
@@ -725,6 +770,7 @@ if [ -z "$SITE_ID" ] && [ -n "${WEBSHELL_SITE_ID:-}" ]; then
 fi
 
 if [ "${PRINT_WATCH_DIRS:-0}" = "1" ]; then
+    LOG_RELAXED=1
     if [ -z "$PROJECT_DIR" ] || [ ! -d "$PROJECT_DIR" ]; then
         echo "错误: PROJECT_DIR 无效: ${PROJECT_DIR:-<empty>}" >&2
         exit 1
