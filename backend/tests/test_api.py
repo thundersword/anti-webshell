@@ -184,3 +184,52 @@ def test_lock_dry_run(client, tmp_path):
     assert resp.status_code == 200, resp.get_data(as_text=True)
     body = resp.get_json()
     assert body["message"] == "locked"
+
+
+def test_cannot_delete_controlplane(client):
+    headers = _login(client)
+    from app.models import Site, db
+
+    with client.application.app_context():
+        if not Site.query.filter_by(site_id="controlplane").first():
+            db.session.add(
+                Site(
+                    site_id="controlplane",
+                    name="自保",
+                    project_dir="/tmp/ui",
+                    profile="controlplane",
+                    node_id="local",
+                )
+            )
+            db.session.commit()
+    r = client.delete("/api/sites/controlplane", headers=headers)
+    assert r.status_code == 403
+    assert "disable-self" in r.get_json().get("error", "")
+
+
+def test_cannot_create_controlplane_via_api(client):
+    headers = _login(client)
+    r = client.post(
+        "/api/sites",
+        headers=headers,
+        json={
+            "site_id": "controlplane",
+            "project_dir": "/tmp/x",
+            "profile": "controlplane",
+            "start": False,
+        },
+    )
+    assert r.status_code == 403
+    assert "ensure-self" in r.get_json().get("error", "")
+
+
+def test_self_guard_status(client):
+    headers = _login(client)
+    r = client.get("/api/service/self-guard", headers=headers)
+    assert r.status_code == 200
+    body = r.get_json()
+    assert body["site_id"] == "controlplane"
+    assert "unit_active" in body
+    assert "lock_status" in body
+    assert "project_dir" in body
+    assert isinstance(body["watch_dirs"], list)

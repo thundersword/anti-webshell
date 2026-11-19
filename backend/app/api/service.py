@@ -1,10 +1,36 @@
+import re
+from pathlib import Path
+
 from flask import jsonify, request
 from flask_jwt_extended import jwt_required
 
 from ..executor import get_executor_for_node
 from ..models import Site
 from . import api_bp
-from .sites import _current_site
+from .sites import CONTROLPLANE_ID, _current_site
+
+_PROJECT_DIR_RE = re.compile(r'^PROJECT_DIR="([^"]*)"')
+
+
+def _read_project_dir_from_conf(conf_path: Path) -> str:
+    if not conf_path.is_file():
+        return ""
+    for line in conf_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        m = _PROJECT_DIR_RE.match(line.strip())
+        if m:
+            return m.group(1)
+    return ""
+
+
+def _read_watch_dirs(watch_path: Path) -> list:
+    if not watch_path.is_file():
+        return []
+    dirs = []
+    for line in watch_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = line.strip()
+        if line and not line.startswith("#"):
+            dirs.append(line)
+    return dirs
 
 
 @api_bp.get("/service/status")
@@ -110,6 +136,41 @@ def service_unlock():
     if not result.ok:
         return jsonify(error=result.message or result.stderr or "解锁失败", detail=result.stdout), 500
     return jsonify(message="unlocked", site_id=site.site_id, detail=result.stdout)
+
+
+@api_bp.get("/service/self-guard")
+@jwt_required()
+def self_guard_status():
+    site_id = CONTROLPLANE_ID
+    site = Site.query.filter_by(site_id=site_id).first()
+    executor = get_executor_for_node(site.node_id if site else "local")
+    conf_path = executor.config_root / f"{site_id}.conf"
+    watch_path = executor.config_root / f"{site_id}.watch"
+
+    project_dir = _read_project_dir_from_conf(conf_path)
+    if not project_dir and site:
+        project_dir = site.project_dir or ""
+
+    if executor.dry_run:
+        unit_active = "unknown"
+    else:
+        st = executor.site_status(site_id)
+        raw = (st.data or {}).get("raw") or st.message or "unknown"
+        unit_active = raw.strip() or "unknown"
+
+    lock_fn = getattr(executor, "lock_status", None)
+    lock_status = ""
+    if callable(lock_fn):
+        lock_result = lock_fn(site_id)
+        lock_status = (lock_result.data or {}).get("status") or lock_result.stdout or ""
+
+    return jsonify(
+        site_id=site_id,
+        unit_active=unit_active,
+        lock_status=lock_status,
+        project_dir=project_dir,
+        watch_dirs=_read_watch_dirs(watch_path),
+    )
 
 
 @api_bp.get("/service/lock-status")

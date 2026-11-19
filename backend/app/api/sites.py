@@ -7,6 +7,8 @@ from ..services.profiles import detect_profile, profile_defaults
 from ..services.site_sync import sync_site
 from . import api_bp
 
+CONTROLPLANE_ID = "controlplane"
+
 
 def _current_site():
     """Resolve site from ?site_id= or X-Site-Id, else first enabled site."""
@@ -46,6 +48,8 @@ def create_site():
 
     if not site_id or not project_dir:
         return jsonify(error="site_id 与 project_dir 必填"), 400
+    if site_id == CONTROLPLANE_ID:
+        return jsonify(error="请使用 manage_sites.sh ensure-self 启用自保"), 403
     if Site.query.filter_by(site_id=site_id).first():
         return jsonify(error="site_id 已存在"), 409
 
@@ -124,6 +128,8 @@ def update_site(site_id):
 @api_bp.delete("/sites/<site_id>")
 @jwt_required()
 def delete_site(site_id):
+    if site_id == CONTROLPLANE_ID:
+        return jsonify(error="controlplane 只能通过 CLI disable-self 禁用"), 403
     site = Site.query.filter_by(site_id=site_id).first()
     if not site:
         return jsonify(error="站点不存在"), 404
