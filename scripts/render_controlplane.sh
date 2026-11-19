@@ -19,8 +19,23 @@ fi
 
 WEBSHELL_UI_ROOT="${WEBSHELL_UI_ROOT:-/www/wwwroot/anti-webshell}"
 WEBSHELL_INSTALL_DIR="${WEBSHELL_INSTALL_DIR:-/opt/webshell_monitor}"
-WEBSHELL_CONFIG_PARENT="${WEBSHELL_CONFIG_PARENT:-/etc/webshell-monitor}"
 WEBSHELL_BACKEND_DIR="${WEBSHELL_BACKEND_DIR:-/opt/anti-webshell/backend}"
+
+# Config parent (default /etc/webshell-monitor): prefer WEBSHELL_CONFIG_PARENT;
+# else derive from WEBSHELL_CONFIG_ROOT — basename "sites" → parent is dirname,
+# otherwise treat ROOT as the parent (e.g. /etc/webshell-monitor).
+if [ -n "${WEBSHELL_CONFIG_PARENT:-}" ]; then
+    :
+elif [ -n "${WEBSHELL_CONFIG_ROOT:-}" ]; then
+  _cfg_root="${WEBSHELL_CONFIG_ROOT%/}"
+  if [ "$(basename "$_cfg_root")" = "sites" ]; then
+    WEBSHELL_CONFIG_PARENT="$(dirname "$_cfg_root")"
+  else
+    WEBSHELL_CONFIG_PARENT="$_cfg_root"
+  fi
+else
+  WEBSHELL_CONFIG_PARENT="/etc/webshell-monitor"
+fi
 OUTPUT_DIR="${WEBSHELL_CONFIG_PARENT}/sites"
 
 LOG_ROOT="/var/log/webshell"
@@ -37,8 +52,9 @@ usage() {
     cat <<'EOF'
 用法: render_controlplane.sh [--output-dir DIR]
 
-环境变量: WEBSHELL_UI_ROOT, WEBSHELL_INSTALL_DIR, WEBSHELL_CONFIG_PARENT,
-  WEBSHELL_BACKEND_DIR；告警可选 CONTROLPLANE_ALERT_EMAIL 等。
+环境变量: WEBSHELL_UI_ROOT, WEBSHELL_INSTALL_DIR, WEBSHELL_CONFIG_PARENT
+  或 WEBSHELL_CONFIG_ROOT（sites 目录或其父目录）, WEBSHELL_BACKEND_DIR；
+  告警可选 CONTROLPLANE_ALERT_EMAIL 等。
 EOF
     exit 1
 }
