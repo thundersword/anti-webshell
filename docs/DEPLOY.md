@@ -50,7 +50,6 @@ cd /opt/anti-webshell
 cd /opt/anti-webshell/scripts
 chmod +x *.sh
 sudo ./manage_sites.sh install
-sudo ./manage_sites.sh ensure-self   # 首次安装后启用控制面自保（见下文）
 ```
 
 会完成：
@@ -59,6 +58,8 @@ sudo ./manage_sites.sh ensure-self   # 首次安装后启用控制面自保（�
 - systemd 模板 → `webshell-monitor@.service`
 - 配置目录 → `/etc/webshell-monitor/sites`
 - 调高 `fs.inotify.max_user_watches` 等
+
+控制面自保 `ensure-self` **不要在这里立刻执行**：引擎要求 UI 根目录（`WEBSHELL_UI_ROOT`，默认 `/www/wwwroot/anti-webshell`）已存在。请先完成第 6 节前端部署，再按「控制面自保」小节启用。
 
 ### 添加要防护的站点
 
@@ -85,9 +86,15 @@ sudo ./manage_sites.sh migrate-legacy <site_id> <项目目录> thinkphp
 
 ### 控制面自保（controlplane）
 
+前置：UI 根目录必须已存在（见第 6 节 `mkdir` / `rsync`）。否则 `PROJECT_DIR` 校验失败，`webshell-monitor@controlplane` 无法启动。
+
 `ensure-self` 渲染并启动 `webshell-monitor@controlplane`，监控 UI 根目录、引擎目录、`/etc/webshell-monitor` 与后端源码。默认对关键路径 `chattr +i`（可用 `ensure-self --no-lock` 跳过首次锁定）。
 
 ```bash
+# 若尚未部署前端，至少先建空目录：
+sudo mkdir -p /www/wwwroot/anti-webshell
+sudo chown root:root /www/wwwroot/anti-webshell
+
 sudo /opt/webshell_monitor/manage_sites.sh ensure-self
 sudo systemctl status webshell-monitor@controlplane
 ```
@@ -195,6 +202,9 @@ pnpm build
 sudo mkdir -p /www/wwwroot/anti-webshell
 sudo chown root:root /www/wwwroot/anti-webshell
 sudo rsync -a --delete dist/ /www/wwwroot/anti-webshell/
+
+# UI 根已就绪后再启用控制面自保（或 ensure-self --no-lock）
+sudo /opt/webshell_monitor/manage_sites.sh ensure-self
 ```
 
 生产**不要**使用 `pnpm dev`。前端请求相对路径 `/api`，由 Nginx 反代。目录应归 `root:root` 所有，**不要**赋予 `www` / php-fpm 用户写权限。
