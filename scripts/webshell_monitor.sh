@@ -411,9 +411,8 @@ handle_create() {
         is_dangerous=1
     fi
 
-    log_message "WARNING" "监控目录新增文件: $file"
-
     if [ "$is_dangerous" -eq 1 ]; then
+        log_message "WARNING" "监控目录新增可疑文件: $file"
         sleep 1
         if [ "${STRICT_QUARANTINE:-false}" = "true" ] || check_file_content "$file"; then
             local reason="包含Webshell特征代码"
@@ -441,6 +440,8 @@ handle_create() {
         fi
         return 0
     fi
+
+    log_message "WARNING" "监控目录新增文件: $file"
 
     if should_send_create_alert "$file"; then
         local alert_msg
