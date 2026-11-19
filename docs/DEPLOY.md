@@ -50,6 +50,7 @@ cd /opt/anti-webshell
 cd /opt/anti-webshell/scripts
 chmod +x *.sh
 sudo ./manage_sites.sh install
+sudo ./manage_sites.sh ensure-self   # 首次安装后启用控制面自保（见下文）
 ```
 
 会完成：
@@ -81,6 +82,17 @@ sudo ./manage_sites.sh migrate-legacy <site_id> <项目目录> thinkphp
 ```
 
 详见 [scripts/MIGRATION.md](../scripts/MIGRATION.md)。
+
+### 控制面自保（controlplane）
+
+`ensure-self` 渲染并启动 `webshell-monitor@controlplane`，监控 UI 根目录、引擎目录、`/etc/webshell-monitor` 与后端源码。默认对关键路径 `chattr +i`（可用 `ensure-self --no-lock` 跳过首次锁定）。
+
+```bash
+sudo /opt/webshell_monitor/manage_sites.sh ensure-self
+sudo systemctl status webshell-monitor@controlplane
+```
+
+关闭自保仅能通过 CLI：`disable-self`（需输入 `YES` 确认）。GUI 不可删除 `controlplane` 站点。
 
 ## 4. 准备数据库
 
@@ -173,18 +185,25 @@ curl -s http://127.0.0.1:5000/api/health
 
 ## 6. 构建并部署前端
 
+默认 UI 静态根目录为 `WEBSHELL_UI_ROOT`（`/www/wwwroot/anti-webshell`），可通过环境变量或 `/etc/webshell-monitor/controlplane.env` 覆盖。
+
 ```bash
 cd /opt/anti-webshell/frontend
 pnpm install
 pnpm build
 
-sudo mkdir -p /var/www/webshell-ui
-sudo rsync -a --delete dist/ /var/www/webshell-ui/
+sudo mkdir -p /www/wwwroot/anti-webshell
+sudo chown root:root /www/wwwroot/anti-webshell
+sudo rsync -a --delete dist/ /www/wwwroot/anti-webshell/
 ```
 
-生产**不要**使用 `pnpm dev`。前端请求相对路径 `/api`，由 Nginx 反代。
+生产**不要**使用 `pnpm dev`。前端请求相对路径 `/api`，由 Nginx 反代。目录应归 `root:root` 所有，**不要**赋予 `www` / php-fpm 用户写权限。
 
-## 7. 配置 Nginx
+## 7. 配置 Nginx（仅静态，禁止 PHP）
+
+管理界面须使用**独立** `server { }` 块，不要嵌在已启用 PHP 的业务站点下，也**不要** `include` 面板自带的 `enable-php-*.conf` 或任何 `fastcgi_pass` 片段。
+
+完整示例见 [nginx-webshell-ui.example.conf](./nginx-webshell-ui.example.conf)。
 
 ```bash
 sudo tee /etc/nginx/sites-available/webshell-ui <<'EOF'
@@ -192,8 +211,13 @@ server {
     listen 80;
     server_name your-monitor.example.com;   # 改成域名或服务器 IP
 
-    root /var/www/webshell-ui;
+    root /www/wwwroot/anti-webshell;
     index index.html;
+
+    # 禁止在此 vhost 执行脚本（即使误上传 .php 也不应被解析）
+    location ~* \.(php|phtml|phar|php\d+|cgi|pl|py|jsp|asp|aspx)$ {
+        return 403;
+    }
 
     location / {
         try_files $uri $uri/ /index.html;
@@ -248,9 +272,11 @@ ls -lh /var/quarantine/<id>/
 ls -lh /var/webshell_backup/<id>/
 ```
 
-更新代码后：
+更新代码后（控制面自保已启用时须先解锁，避免 `chattr +i` 阻塞写入）：
 
 ```bash
+sudo /opt/webshell_monitor/manage_sites.sh unlock-self
+
 cd /opt/anti-webshell && git pull
 
 # 引擎
@@ -263,7 +289,10 @@ sudo systemctl restart webshell-api
 
 # 前端
 cd ../frontend && pnpm install && pnpm build
-sudo rsync -a --delete dist/ /var/www/webshell-ui/
+sudo rsync -a --delete dist/ /www/wwwroot/anti-webshell/
+
+sudo /opt/webshell_monitor/manage_sites.sh lock-self
+sudo systemctl restart webshell-api webshell-monitor@controlplane
 ```
 
 ## 10. 安全清单
@@ -273,7 +302,8 @@ sudo rsync -a --delete dist/ /var/www/webshell-ui/
 - [ ] `WEBSHELL_DRY_RUN=0`
 - [ ] 配置告警（邮件 / 企业微信 / 钉钉）
 - [ ] 定期备份 MySQL（或 sqlite）与 `/var/webshell_backup/`
-- [ ] 关键文件锁定（`chattr +i`）开启后，发版须先 `--unlock` 再 `--lock`
+- [ ] 控制面已 `ensure-self`；Nginx 对 UI 根目录无 PHP / fastcgi
+- [ ] 关键文件锁定（`chattr +i`）开启后，发版须先 `unlock-self` 再 `lock-self`
 
 ## 部署顺序小结
 
@@ -281,6 +311,7 @@ sudo rsync -a --delete dist/ /var/www/webshell-ui/
 上传代码
   → manage_sites.sh install + add-site   # 真正防护
   → MySQL + backend .env + gunicorn systemd
-  → frontend build → Nginx 静态 + /api 反代
+  → ensure-self（控制面自保）
+  → frontend build → Nginx 仅静态 + /api 反代（禁止 PHP）
   → 登录 GUI 验收
 ```

@@ -30,6 +30,7 @@ sudo ./manage_sites.sh add-site blog /www/wwwroot/blog thinkphp \
   <site_id>.conf          # 站点主配置（可 source）
   <site_id>.critical      # 关键文件绝对路径列表
   <site_id>.whitelist     # 白名单目录列表
+  <site_id>.watch         # 可选：多根目录监控列表（每行一个绝对路径）
 
 /opt/webshell_monitor/
   webshell_monitor.sh
@@ -49,6 +50,27 @@ sudo ./manage_sites.sh add-site blog /www/wwwroot/blog thinkphp \
 sudo ./render_site_config.sh blog /www/wwwroot/blog thinkphp \
   --alert-email admin@example.com
 ```
+
+## 控制面自保（controlplane）
+
+`webshell-monitor@controlplane` 监控 UI 静态根、引擎目录、站点配置目录与后端源码。配置由 `render_controlplane.sh` 生成，含 `controlplane.watch`（多根监控路径，一行一个目录）。
+
+```bash
+# 首次或升级后启用（默认会 lock-self）
+sudo ./manage_sites.sh ensure-self
+sudo ./manage_sites.sh ensure-self --no-lock   # 首次部署尚未 rsync 前端时可先不锁
+
+# 发版：解锁 → 更新文件 → 再锁
+sudo ./manage_sites.sh unlock-self
+# ... git pull / build / rsync ...
+sudo ./manage_sites.sh lock-self
+
+# 关闭自保（须交互输入 YES；配置默认保留，可用 ensure-self 恢复）
+sudo ./manage_sites.sh disable-self
+sudo ./manage_sites.sh disable-self --purge   # 同时删除 controlplane.* 配置
+```
+
+GUI 不能删除 `controlplane` 站点；关闭自保只能用 `disable-self`。路径可通过 `WEBSHELL_UI_ROOT` 等环境变量或 `/etc/webshell-monitor/controlplane.env` 覆盖，见 [docs/DEPLOY.md](../docs/DEPLOY.md)。
 
 ## 常用命令
 
