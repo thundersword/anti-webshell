@@ -262,6 +262,7 @@ sudo nginx -t && sudo systemctl reload nginx
 4. **站点同步**：GUI「站点管理」操作后，`sync_status` 应为 `synced`，对应 `webshell-monitor@*` 为 active
 5. **功能抽测**
    - 非白名单目录创建含 `eval(` 的 `.php` → 进入 `/var/quarantine/<site_id>/`
+   - 非白名单目录创建普通 `.txt`（无恶意特征）→ 引擎日志含「监控目录新增文件」，并触发告警
    - 修改关键文件 → 自动恢复（`AUTO_RESTORE=true`）
 
 ## 9. 日常运维

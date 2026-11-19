@@ -123,6 +123,8 @@ sudo /opt/webshell_monitor/webshell_monitor.sh --site blog --unlock
 
 引擎对 `create` / `moved_to` / `close_write` 监听（不用每次 `write()` 的 `modify`），并跳过 `.git` 等热路径。
 
+**新增文件告警**：非白名单目录下新建文件会记 WARNING 日志并走告警渠道；白名单内新增仅记录、不告警。同一文件 60 秒内重复 create 会合并为一次告警（去重）。
+
 GUI 建站时可点「探测框架」，或 CLI 使用对应 profile 名。
 
 ## 从旧版迁移

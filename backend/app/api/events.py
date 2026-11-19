@@ -61,6 +61,8 @@ def _ingest_from_log(site: Site, limit: int = 200, force: bool = False):
             event_type = "critical_modify"
         elif "可疑文件" in msg:
             event_type = "suspicious_create"
+        elif "监控目录新增文件" in msg:
+            event_type = "file_create"
         if ":" in msg:
             maybe = msg.rsplit(":", 1)[-1].strip()
             if maybe.startswith("/"):
