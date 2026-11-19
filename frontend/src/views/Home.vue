@@ -52,6 +52,27 @@
       </div>
     </el-card>
     
+    <el-card class="self-guard-card" v-loading="selfGuardLoading">
+      <template #header>
+        <span>控制面自保</span>
+      </template>
+      <div class="self-guard-body">
+        <div class="self-guard-row">
+          <span class="self-guard-label">状态</span>
+          <el-tag :type="selfGuardTagType" size="small">{{ selfGuardState }}</el-tag>
+        </div>
+        <div class="self-guard-row">
+          <span class="self-guard-label">监控目录</span>
+          <span class="self-guard-value" :title="watchSummaryFull">{{ watchSummary }}</span>
+        </div>
+        <div class="self-guard-row">
+          <span class="self-guard-label">锁定</span>
+          <span class="self-guard-value" :title="lockSummaryFull">{{ lockSummary }}</span>
+        </div>
+        <p class="self-guard-hint">关闭自保请在服务器执行 manage_sites.sh disable-self</p>
+      </div>
+    </el-card>
+
     <el-card class="service-card">
       <template #header>
         <div class="card-header">
@@ -106,6 +127,39 @@ export default {
     
     const serviceStatus = ref('stopped')
     const loading = ref(false)
+    const selfGuardLoading = ref(false)
+    const selfGuard = ref(null)
+
+    const truncateText = (text, max = 96) => {
+      if (!text) return '—'
+      const t = String(text)
+      return t.length > max ? `${t.slice(0, max)}…` : t
+    }
+
+    const selfGuardState = computed(() => {
+      const raw = (selfGuard.value?.unit_active || 'unknown').toLowerCase()
+      if (raw === 'active') return 'active'
+      if (raw === 'inactive') return 'inactive'
+      return 'unknown'
+    })
+
+    const selfGuardTagType = computed(() => {
+      if (selfGuardState.value === 'active') return 'success'
+      if (selfGuardState.value === 'inactive') return 'info'
+      return 'warning'
+    })
+
+    const watchSummaryFull = computed(() => {
+      const dirs = selfGuard.value?.watch_dirs || []
+      if (dirs.length) return dirs.join('、')
+      return selfGuard.value?.project_dir || '—'
+    })
+
+    const watchSummary = computed(() => truncateText(watchSummaryFull.value, 120))
+
+    const lockSummaryFull = computed(() => selfGuard.value?.lock_status || '—')
+
+    const lockSummary = computed(() => truncateText(lockSummaryFull.value, 96))
     
     const statusType = computed(() => {
       if (serviceStatus.value === 'running') return 'success'
@@ -134,6 +188,18 @@ export default {
         serviceStatus.value = data.status
       } catch (error) {
         console.error('加载服务状态失败', error)
+      }
+    }
+
+    const loadSelfGuard = async () => {
+      selfGuardLoading.value = true
+      try {
+        selfGuard.value = await api.get('/service/self-guard')
+      } catch (error) {
+        console.error('加载自保状态失败', error)
+        selfGuard.value = null
+      } finally {
+        selfGuardLoading.value = false
       }
     }
     
@@ -169,6 +235,7 @@ export default {
       if (typeof document !== 'undefined' && document.hidden) return
       loadStats()
       loadServiceStatus()
+      loadSelfGuard()
     }
 
     watch(currentSiteId, () => {
@@ -195,7 +262,14 @@ export default {
       statusText,
       loading,
       handleStart,
-      handleStop
+      handleStop,
+      selfGuardLoading,
+      selfGuardState,
+      selfGuardTagType,
+      watchSummary,
+      watchSummaryFull,
+      lockSummary,
+      lockSummaryFull
     }
   }
 }
@@ -265,8 +339,38 @@ export default {
   opacity: 0.8;
 }
 
+.self-guard-card,
 .service-card {
   margin-top: 20px;
+}
+
+.self-guard-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.self-guard-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  font-size: 14px;
+}
+
+.self-guard-label {
+  flex: 0 0 72px;
+  color: var(--el-text-color-secondary);
+}
+
+.self-guard-value {
+  flex: 1;
+  word-break: break-all;
+}
+
+.self-guard-hint {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
 }
 
 .card-header {

@@ -24,7 +24,14 @@
         <el-table-column label="操作" width="220">
           <template #default="{ row }">
             <el-button size="small" @click="selectSite(row)">切换</el-button>
-            <el-button size="small" type="danger" @click="removeSite(row)">删除</el-button>
+            <el-button
+              v-if="canDelete(row)"
+              size="small"
+              type="danger"
+              @click="removeSite(row)"
+            >
+              删除
+            </el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -187,6 +194,8 @@ export default {
       ElMessage.success(`已切换到站点 ${row.site_id}`)
     }
 
+    const canDelete = (row) => row.site_id !== 'controlplane'
+
     const removeSite = async (row) => {
       await ElMessageBox.confirm(`确定删除站点 ${row.site_id}？`, '提示', { type: 'warning' })
       await api.delete(`/sites/${row.site_id}`)
@@ -212,6 +221,7 @@ export default {
       detectFramework,
       createSite,
       selectSite,
+      canDelete,
       removeSite
     }
   }
