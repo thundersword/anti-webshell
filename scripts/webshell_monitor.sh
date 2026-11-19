@@ -39,8 +39,11 @@ STRICT_QUARANTINE="false"
 INOTIFY_PIDS=()
 INOTIFY_FIFO=""
 PRINT_WATCH_DIRS=0
+SELF_TEST_CREATE_ALERT=0
 # Relaxed logging: skip hard failures when appending to LOG_FILE (debug CLI only).
 LOG_RELAXED=0
+
+CREATE_ALERT_DEDUPE_SECS="${CREATE_ALERT_DEDUPE_SECS:-60}"
 
 #######################################
 # Config loading
@@ -251,7 +254,7 @@ send_alert() {
 is_whitelisted() {
     local file=$1
     local whitelist
-    for whitelist in "${WHITELIST_DIRS[@]}"; do
+    for whitelist in ${WHITELIST_DIRS[@]+"${WHITELIST_DIRS[@]}"}; do
         if [[ "$file" == "$whitelist"* ]]; then
             return 0
         fi
@@ -322,9 +325,42 @@ check_file_content() {
     return 1
 }
 
+create_alert_stamp_path() {
+    local file=$1
+    local key
+    key=$(printf '%s' "$file" | sha256sum 2>/dev/null | awk '{print $1}')
+    if [ -z "$key" ]; then
+        key=$(printf '%s' "$file" | md5sum 2>/dev/null | awk '{print $1}')
+    fi
+    [ -n "$key" ] || key=$(basename "$file")
+    echo "${QUARANTINE_DIR}/.alert_dedupe/${key}"
+}
+
+should_send_create_alert() {
+    local file=$1
+    local stamp age
+    stamp=$(create_alert_stamp_path "$file")
+    mkdir -p "$(dirname "$stamp")" 2>/dev/null || true
+    if [ -f "$stamp" ]; then
+        age=$(( $(date +%s) - $(stat -c %Y "$stamp" 2>/dev/null || stat -f %m "$stamp") ))
+        if [ "$age" -lt "$CREATE_ALERT_DEDUPE_SECS" ]; then
+            return 1
+        fi
+    fi
+    return 0
+}
+
+mark_create_alert_sent() {
+    local stamp
+    stamp=$(create_alert_stamp_path "$1")
+    mkdir -p "$(dirname "$stamp")" 2>/dev/null || true
+    date +%s >"$stamp" 2>/dev/null || true
+}
+
 quarantine_file() {
     local file=$1
     local reason=$2
+    local alert_mode="${3:-}"
 
     if [ ! -f "$file" ]; then
         return 1
@@ -342,8 +378,9 @@ quarantine_file() {
         log_message "CRITICAL" "文件已隔离: $file -> $quarantine_path"
         log_message "CRITICAL" "隔离原因: $reason"
 
-        local alert_msg
-        alert_msg="检测到可疑文件并已隔离
+        if [ "$alert_mode" != "no_alert" ]; then
+            local alert_msg
+            alert_msg="检测到可疑文件并已隔离
 站点: $SITE_ID
 文件: $file
 原因: $reason
@@ -351,7 +388,8 @@ quarantine_file() {
 时间: $(date '+%Y-%m-%d %H:%M:%S')
 服务器: $(hostname)
 请立即检查！"
-        send_alert "🚨 Webshell检测告警 - 文件已隔离 [$SITE_ID]" "$alert_msg"
+            send_alert "🚨 Webshell检测告警 - 文件已隔离 [$SITE_ID]" "$alert_msg"
+        fi
         return 0
     else
         log_message "ERROR" "无法隔离文件: $file"
@@ -364,29 +402,55 @@ handle_create() {
     if is_noisy_path "$file"; then
         return 0
     fi
+    if is_whitelisted "$file"; then
+        return 0
+    fi
 
+    local is_dangerous=0
     if [[ "$file" =~ \.($DANGEROUS_EXTENSIONS)$ ]]; then
-        if ! is_whitelisted "$file"; then
-            log_message "WARNING" "检测到新增可疑文件: $file"
-            sleep 1
+        is_dangerous=1
+    fi
 
-            if [ "${STRICT_QUARANTINE:-false}" = "true" ] || check_file_content "$file"; then
-                local reason="包含Webshell特征代码"
-                if [ "${STRICT_QUARANTINE:-false}" = "true" ] && ! check_file_content "$file"; then
-                    reason="STRICT_QUARANTINE: 危险扩展名文件"
-                fi
+    log_message "WARNING" "监控目录新增文件: $file"
+
+    if [ "$is_dangerous" -eq 1 ]; then
+        sleep 1
+        if [ "${STRICT_QUARANTINE:-false}" = "true" ] || check_file_content "$file"; then
+            local reason="包含Webshell特征代码"
+            if [ "${STRICT_QUARANTINE:-false}" = "true" ] && ! check_file_content "$file"; then
+                reason="STRICT_QUARANTINE: 危险扩展名文件"
+            fi
+            # quarantine_file already send_alert — mark dedupe to suppress generic create alert
+            if should_send_create_alert "$file"; then
                 quarantine_file "$file" "$reason"
+                mark_create_alert_sent "$file"
             else
-                log_message "INFO" "文件未包含明显恶意代码，但仍需人工审查: $file"
-                local alert_msg
-                alert_msg="检测到新增可疑文件（需人工审查）
+                quarantine_file "$file" "$reason" "no_alert"
+            fi
+            return 0
+        fi
+        if should_send_create_alert "$file"; then
+            local alert_msg
+            alert_msg="监控目录新增可疑文件（需人工审查）
 站点: $SITE_ID
 文件: $file
 时间: $(date '+%Y-%m-%d %H:%M:%S')
 服务器: $(hostname)"
-                send_alert "⚠️ 可疑文件创建 [$SITE_ID]" "$alert_msg"
-            fi
+            send_alert "⚠️ 可疑文件创建 [$SITE_ID]" "$alert_msg"
+            mark_create_alert_sent "$file"
         fi
+        return 0
+    fi
+
+    if should_send_create_alert "$file"; then
+        local alert_msg
+        alert_msg="监控目录新增文件
+站点: $SITE_ID
+文件: $file
+时间: $(date '+%Y-%m-%d %H:%M:%S')
+服务器: $(hostname)"
+        send_alert "⚠️ 监控目录新增文件 [$SITE_ID]" "$alert_msg"
+        mark_create_alert_sent "$file"
     fi
 }
 
@@ -669,6 +733,65 @@ main() {
     done <"$INOTIFY_FIFO"
 }
 
+run_self_test_create_alert() {
+    local tmp test_file alert_count
+    tmp=$(mktemp -d)
+    self_test_alerts_log="$tmp/alerts.log"
+    : >"$self_test_alerts_log"
+
+    QUARANTINE_DIR="$tmp/quarantine"
+    SITE_ID="test"
+    PROJECT_DIR="$tmp/site"
+    LOG_FILE="$tmp/monitor.log"
+    LOG_RELAXED=1
+    WHITELIST_DIRS=()
+    mkdir -p "$QUARANTINE_DIR" "$PROJECT_DIR"
+    touch "$LOG_FILE"
+
+    send_alert() {
+        {
+            echo '---ALERT---'
+            echo "$1"
+        } >>"$self_test_alerts_log"
+    }
+
+    test_file="$PROJECT_DIR/newfile.txt"
+    printf 'hello\n' >"$test_file"
+
+    handle_create "$test_file"
+    if ! grep -q "监控目录新增文件" "$LOG_FILE"; then
+        echo "FAIL: log missing 监控目录新增文件" >&2
+        rm -rf "$tmp"
+        return 1
+    fi
+    if [ ! -s "$self_test_alerts_log" ]; then
+        echo "FAIL: expected non-empty alerts.log after first handle_create" >&2
+        rm -rf "$tmp"
+        return 1
+    fi
+
+    handle_create "$test_file"
+    alert_count=$(grep -c '^---ALERT---' "$self_test_alerts_log" || true)
+    if [ "$alert_count" -ne 1 ]; then
+        echo "FAIL: dedupe expected 1 alert line, got $alert_count" >&2
+        rm -rf "$tmp"
+        return 1
+    fi
+
+    WHITELIST_DIRS=("$PROJECT_DIR")
+    handle_create "$test_file"
+    alert_count=$(grep -c '^---ALERT---' "$self_test_alerts_log" || true)
+    if [ "$alert_count" -ne 1 ]; then
+        echo "FAIL: whitelist should not add alerts, got $alert_count" >&2
+        rm -rf "$tmp"
+        return 1
+    fi
+
+    rm -rf "$tmp"
+    echo "OK"
+    return 0
+}
+
 require_site_arg() {
     if [ -z "${SITE_ID:-}" ]; then
         echo "错误: 请指定 --site <site_id>" >&2
@@ -695,6 +818,7 @@ Webshell监控脚本（多站点）
   $0 --print-watch-dirs          解析并输出监控根目录列表（每行一个）
   $0 --watch-file <列表文件>     覆盖 WATCH_DIRS_FILE（与 --print-watch-dirs 联用）
   $0 --project-dir <目录>        覆盖 PROJECT_DIR（与 --print-watch-dirs 联用）
+  $0 --self-test-create-alert    新建文件告警逻辑自检（供 scripts/tests 使用）
 
 配置目录: $CONFIG_ROOT/<site_id>.conf
 systemd:  systemctl start webshell-monitor@<site_id>
@@ -752,6 +876,10 @@ while [[ $# -gt 0 ]]; do
             PROJECT_DIR="$2"
             shift 2
             ;;
+        --self-test-create-alert)
+            SELF_TEST_CREATE_ALERT=1
+            shift
+            ;;
         --help|-h)
             print_help
             exit 0
@@ -778,6 +906,12 @@ if [ "${PRINT_WATCH_DIRS:-0}" = "1" ]; then
     load_watch_dirs
     printf '%s\n' "${WATCH_DIRS[@]}"
     exit 0
+fi
+
+if [ "${SELF_TEST_CREATE_ALERT:-0}" = "1" ]; then
+    set +e
+    run_self_test_create_alert
+    exit $?
 fi
 
 require_site_arg
