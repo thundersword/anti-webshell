@@ -33,6 +33,12 @@ HTML_RULES_FILE="$SCRIPT_HOME/rules/html_malware.rules"
 
 CRITICAL_FILES=()
 WHITELIST_DIRS=()
+WATCH_DIRS_FILE=""
+WATCH_DIRS=()
+STRICT_QUARANTINE="false"
+INOTIFY_PIDS=()
+INOTIFY_FIFO=""
+PRINT_WATCH_DIRS=0
 
 #######################################
 # Config loading
@@ -72,6 +78,27 @@ load_site_config() {
     if [ -z "$PROJECT_DIR" ] || [ ! -d "$PROJECT_DIR" ]; then
         echo "错误: PROJECT_DIR 无效: ${PROJECT_DIR:-<empty>}" >&2
         exit 1
+    fi
+
+    load_watch_dirs
+}
+
+load_watch_dirs() {
+    WATCH_DIRS=()
+    if [ -n "${WATCH_DIRS_FILE:-}" ] && [ -f "$WATCH_DIRS_FILE" ]; then
+        while IFS= read -r line || [ -n "$line" ]; do
+            case "$line" in
+                ''|\#*) continue ;;
+            esac
+            if [ -d "$line" ]; then
+                WATCH_DIRS+=("$line")
+            else
+                log_message "WARNING" "watch dir missing, skip: $line"
+            fi
+        done < "$WATCH_DIRS_FILE"
+    fi
+    if [ "${#WATCH_DIRS[@]}" -eq 0 ]; then
+        WATCH_DIRS=("$PROJECT_DIR")
     fi
 }
 
@@ -132,13 +159,14 @@ init() {
 log_message() {
     local level=$1
     local message=$2
+    mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
     local timestamp
     timestamp=$(date '+%Y-%m-%d %H:%M:%S')
     local prefix="[$timestamp] [$level]"
     if [ -n "${SITE_ID:-}" ]; then
         prefix="[$timestamp] [$level] [site=$SITE_ID]"
     fi
-    echo "$prefix $message" >> "$LOG_FILE"
+    echo "$prefix $message" >> "$LOG_FILE" 2>/dev/null || true
     echo "$prefix $message"
 }
 
@@ -302,8 +330,12 @@ handle_create() {
             log_message "WARNING" "检测到新增可疑文件: $file"
             sleep 1
 
-            if check_file_content "$file"; then
-                quarantine_file "$file" "包含Webshell特征代码"
+            if [ "${STRICT_QUARANTINE:-false}" = "true" ] || check_file_content "$file"; then
+                local reason="包含Webshell特征代码"
+                if [ "${STRICT_QUARANTINE:-false}" = "true" ] && ! check_file_content "$file"; then
+                    reason="STRICT_QUARANTINE: 危险扩展名文件"
+                fi
+                quarantine_file "$file" "$reason"
             else
                 log_message "INFO" "文件未包含明显恶意代码，但仍需人工审查: $file"
                 local alert_msg
@@ -538,6 +570,10 @@ EOF
 }
 
 cleanup() {
+    if [ "${#INOTIFY_PIDS[@]}" -gt 0 ]; then
+        kill "${INOTIFY_PIDS[@]}" 2>/dev/null || true
+    fi
+    rm -f "${INOTIFY_FIFO:-}"
     log_message "INFO" "收到退出信号，停止监控"
     generate_report
     exit 0
@@ -562,15 +598,24 @@ main() {
     set +e
     # Always drop VCS/tooling trees even if a profile omit them.
     local combined_exclude
-    combined_exclude="(${INOTIFY_EXCLUDE}|\\.git|\\.svn|\\.hg|node_modules)"
+    combined_exclude="(${INOTIFY_EXCLUDE}|\\.git|\\.svn|\\.hg|node_modules|\\.venv|__pycache__)"
     log_message "INFO" "inotify exclude: $combined_exclude"
+    log_message "INFO" "监控根目录: ${WATCH_DIRS[*]}"
     # close_write instead of modify: one event per save, not per write() syscall.
-    inotifywait -m -r \
-        --exclude "$combined_exclude" \
-        -e create,close_write,moved_to \
-        --format '%e %w%f' \
-        "$PROJECT_DIR" 2>/dev/null | while read -r event file; do
-
+    INOTIFY_FIFO="$QUARANTINE_DIR/.inotify.fifo"
+    rm -f "$INOTIFY_FIFO"
+    mkfifo "$INOTIFY_FIFO"
+    INOTIFY_PIDS=()
+    local root
+    for root in "${WATCH_DIRS[@]}"; do
+        inotifywait -m -r \
+            --exclude "$combined_exclude" \
+            -e create,close_write,moved_to \
+            --format '%e %w%f' \
+            "$root" >>"$INOTIFY_FIFO" 2>/dev/null &
+        INOTIFY_PIDS+=($!)
+    done
+    while read -r event file; do
         case "$event" in
             *ISDIR*)
                 ;;
@@ -581,7 +626,7 @@ main() {
                 handle_modify "$file"
                 ;;
         esac
-    done
+    done <"$INOTIFY_FIFO"
 }
 
 require_site_arg() {
@@ -650,6 +695,18 @@ while [[ $# -gt 0 ]]; do
             ACTION="lock-status"
             shift
             ;;
+        --print-watch-dirs)
+            PRINT_WATCH_DIRS=1
+            shift
+            ;;
+        --watch-file)
+            WATCH_DIRS_FILE="$2"
+            shift 2
+            ;;
+        --project-dir)
+            PROJECT_DIR="$2"
+            shift 2
+            ;;
         --help|-h)
             print_help
             exit 0
@@ -665,6 +722,16 @@ done
 # Allow SITE_ID from environment (systemd Environment)
 if [ -z "$SITE_ID" ] && [ -n "${WEBSHELL_SITE_ID:-}" ]; then
     SITE_ID="$WEBSHELL_SITE_ID"
+fi
+
+if [ "${PRINT_WATCH_DIRS:-0}" = "1" ]; then
+    if [ -z "$PROJECT_DIR" ] || [ ! -d "$PROJECT_DIR" ]; then
+        echo "错误: PROJECT_DIR 无效: ${PROJECT_DIR:-<empty>}" >&2
+        exit 1
+    fi
+    load_watch_dirs
+    printf '%s\n' "${WATCH_DIRS[@]}"
+    exit 0
 fi
 
 require_site_arg
