@@ -208,6 +208,8 @@ sudo /opt/webshell_monitor/manage_sites.sh ensure-self
 
 生产**不要**使用 `pnpm dev`。前端请求相对路径 `/api`，由 Nginx 反代。目录应归 `root:root` 所有，**不要**赋予 `www` / php-fpm 用户写权限。
 
+前端使用 **Hash 路由**（地址形如 `/#/config`），刷新页面不依赖 Nginx 回退；若改用 History 模式，必须保证 `location /` 含 `try_files $uri $uri/ /index.html;`（宝塔勿写成回退 `index.php`）。
+
 ## 7. 配置 Nginx（仅静态，禁止 PHP）
 
 管理界面须使用**独立** `server { }` 块，不要嵌在已启用 PHP 的业务站点下，也**不要** `include` 面板自带的 `enable-php-*.conf` 或任何 `fastcgi_pass` 片段。

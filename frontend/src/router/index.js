@@ -1,4 +1,4 @@
-import { createRouter, createWebHistory } from 'vue-router'
+import { createRouter, createWebHashHistory } from 'vue-router'
 import Login from '../views/Login.vue'
 import Dashboard from '../views/Dashboard.vue'
 
@@ -21,25 +21,25 @@ const routes = [
         meta: { title: '首页' }
       },
       {
-        path: '/sites',
+        path: 'sites',
         name: 'Sites',
         component: () => import('../views/Sites.vue'),
         meta: { title: '站点管理' }
       },
       {
-        path: '/config',
+        path: 'config',
         name: 'Config',
         component: () => import('../views/Config.vue'),
         meta: { title: '配置管理' }
       },
       {
-        path: '/monitor',
+        path: 'monitor',
         name: 'Monitor',
         component: () => import('../views/Monitor.vue'),
         meta: { title: '实时监控' }
       },
       {
-        path: '/events',
+        path: 'events',
         name: 'Events',
         component: () => import('../views/Events.vue'),
         meta: { title: '事件日志' }
@@ -48,8 +48,9 @@ const routes = [
   }
 ]
 
+// Hash history: refresh works even when panel Nginx lacks try_files → index.html
 const router = createRouter({
-  history: createWebHistory(),
+  history: createWebHashHistory(),
   routes
 })
 

@@ -7,6 +7,22 @@ const api = axios.create({
   timeout: 10000
 })
 
+/** Paths that are host-global — never attach current site_id / X-Site-Id. */
+const GLOBAL_API_PATHS = [
+  '/service/self-guard',
+  '/config/alert-config',
+  '/profiles',
+  '/auth/',
+  '/health'
+]
+
+function isGlobalApiPath(url = '') {
+  const path = String(url).split('?')[0]
+  return GLOBAL_API_PATHS.some(
+    (prefix) => path === prefix || path.startsWith(prefix)
+  )
+}
+
 // 请求拦截器
 api.interceptors.request.use(
   (config) => {
@@ -15,7 +31,7 @@ api.interceptors.request.use(
       config.headers.Authorization = `Bearer ${token}`
     }
     const siteId = localStorage.getItem('current_site_id')
-    if (siteId) {
+    if (siteId && !isGlobalApiPath(config.url)) {
       config.headers['X-Site-Id'] = siteId
       // Also attach as query for GET convenience when not already set
       if (config.method === 'get' || !config.method) {

@@ -229,6 +229,13 @@ def test_self_guard_status(client):
     assert r.status_code == 200
     body = r.get_json()
     assert body["site_id"] == "controlplane"
+    # Query/header site context must not change or 404 this global endpoint
+    r2 = client.get(
+        "/api/service/self-guard?site_id=blog",
+        headers={**headers, "X-Site-Id": "blog"},
+    )
+    assert r2.status_code == 200
+    assert r2.get_json()["site_id"] == "controlplane"
     assert "unit_active" in body
     assert "lock_status" in body
     assert "project_dir" in body
