@@ -4,6 +4,7 @@ from flask_jwt_extended import jwt_required
 from ..executor import get_executor_for_node
 from ..models import CriticalFile, Site, WhitelistDir, db
 from ..services.profiles import detect_profile, profile_defaults
+from ..services.alerts import get_global_alert_values
 from ..services.site_sync import sync_site
 from . import api_bp
 
@@ -83,6 +84,12 @@ def create_site():
     for p in white_paths:
         db.session.add(WhitelistDir(site_pk=site.id, dir_path=p, enabled=True))
 
+    db.session.commit()
+
+    values = get_global_alert_values()
+    site.alert_email = values["alert_email"]
+    site.wechat_webhook = values["wechat_webhook"]
+    site.dingtalk_webhook = values["dingtalk_webhook"]
     db.session.commit()
 
     ok, msg = sync_site(site, restart=bool(data.get("start", True)))

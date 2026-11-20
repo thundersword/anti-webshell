@@ -1,7 +1,8 @@
 from flask import jsonify, request
 from flask_jwt_extended import jwt_required
 
-from ..models import AlertConfig, CriticalFile, Site, WhitelistDir, db
+from ..models import AlertConfig, CriticalFile, WhitelistDir, db
+from ..services.alerts import apply_global_alerts, ensure_global_alert_rows
 from ..services.site_sync import sync_site
 from . import api_bp
 from .sites import _current_site
@@ -92,35 +93,7 @@ def delete_whitelist_dir(item_id):
 @api_bp.get("/config/alert-config")
 @jwt_required()
 def list_alert_config():
-    site = _current_site()
-    rows = AlertConfig.query.filter(
-        (AlertConfig.site_pk == (site.id if site else None)) | (AlertConfig.site_pk.is_(None))
-    ).all()
-    if not rows and site:
-        # seed from site fields
-        seeds = [
-            AlertConfig(
-                site_pk=site.id,
-                type="email",
-                enabled=bool(site.alert_email),
-                alert_email=site.alert_email,
-            ),
-            AlertConfig(
-                site_pk=site.id,
-                type="wechat",
-                enabled=bool(site.wechat_webhook),
-                webhook_url=site.wechat_webhook,
-            ),
-            AlertConfig(
-                site_pk=site.id,
-                type="dingtalk",
-                enabled=bool(site.dingtalk_webhook),
-                webhook_url=site.dingtalk_webhook,
-            ),
-        ]
-        db.session.add_all(seeds)
-        db.session.commit()
-        rows = seeds
+    rows = ensure_global_alert_rows()
     return jsonify([r.to_dict() for r in rows])
 
 
@@ -128,7 +101,7 @@ def list_alert_config():
 @jwt_required()
 def update_alert_config(item_id):
     row = AlertConfig.query.get(item_id)
-    if not row:
+    if not row or row.site_pk is not None:
         return jsonify(error="不存在"), 404
     data = request.get_json(silent=True) or {}
     if "enabled" in data:
@@ -138,15 +111,5 @@ def update_alert_config(item_id):
     if "alert_email" in data:
         row.alert_email = data["alert_email"]
     db.session.commit()
-
-    site = Site.query.get(row.site_pk) if row.site_pk else _current_site()
-    if site:
-        if row.type == "email":
-            site.alert_email = row.alert_email if row.enabled else ""
-        elif row.type == "wechat":
-            site.wechat_webhook = row.webhook_url if row.enabled else ""
-        elif row.type == "dingtalk":
-            site.dingtalk_webhook = row.webhook_url if row.enabled else ""
-        db.session.commit()
-        sync_site(site, restart=True)
+    apply_global_alerts()
     return jsonify(row.to_dict())

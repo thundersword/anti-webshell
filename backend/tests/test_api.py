@@ -233,3 +233,49 @@ def test_self_guard_status(client):
     assert "lock_status" in body
     assert "project_dir" in body
     assert isinstance(body["watch_dirs"], list)
+
+
+def test_global_alert_config_seed_and_update(client, tmp_path):
+    headers = _login(client)
+    # create a site with a wechat webhook (legacy per-site field)
+    project = tmp_path / "s"
+    project.mkdir()
+    (project / "index.php").write_text("<?php", encoding="utf-8")
+    client.post(
+        "/api/sites",
+        headers=headers,
+        json={
+            "site_id": "blog1",
+            "project_dir": str(project),
+            "profile": "plain_php",
+            "start": False,
+            "wechat_webhook": "https://qyapi.example/hook-old",
+        },
+    )
+    r = client.get("/api/config/alert-config", headers=headers)
+    assert r.status_code == 200
+    rows = r.get_json()
+    assert len(rows) == 3
+    assert all(row.get("site_pk") is None for row in rows)
+    wechat = next(x for x in rows if x["type"] == "wechat")
+    # seeded from site
+    assert wechat["webhook_url"] == "https://qyapi.example/hook-old"
+    assert wechat["enabled"] is True
+
+    r2 = client.put(
+        f"/api/config/alert-config/{wechat['id']}",
+        headers=headers,
+        json={"enabled": True, "webhook_url": "https://qyapi.example/hook-new"},
+    )
+    assert r2.status_code == 200
+    site = client.get("/api/sites/blog1", headers=headers).get_json()
+    assert site["wechat_webhook"] == "https://qyapi.example/hook-new"
+
+
+def test_global_alert_get_without_sites(client):
+    headers = _login(client)
+    r = client.get("/api/config/alert-config", headers=headers)
+    assert r.status_code == 200
+    rows = r.get_json()
+    assert len(rows) == 3
+    assert all(row.get("site_pk") is None for row in rows)
