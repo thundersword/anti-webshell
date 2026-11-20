@@ -1,19 +1,5 @@
 <template>
   <div class="config">
-    <el-alert
-      v-if="!currentSiteId"
-      type="warning"
-      title="请先在「站点管理」中创建并选择站点"
-      :closable="false"
-      style="margin-bottom: 16px"
-    />
-    <el-alert
-      v-else
-      type="info"
-      :title="`当前站点: ${currentSiteId}`"
-      :closable="false"
-      style="margin-bottom: 16px"
-    />
     <el-tabs v-model="activeTab">
       <el-tab-pane label="关键文件" name="critical">
         <el-card>
@@ -96,56 +82,6 @@
           <pre class="lock-status">{{ lockStatusText || '尚未查询锁定状态' }}</pre>
         </el-card>
       </el-tab-pane>
-
-      <el-tab-pane label="告警配置" name="alert">
-        <el-card>
-          <template #header>
-            <span>告警配置</span>
-          </template>
-
-          <el-alert
-            type="info"
-            :closable="false"
-            title="全局告警：对所有站点与控制面生效"
-            style="margin-bottom: 12px"
-          />
-
-          <el-table :data="alertConfigs" style="width: 100%">
-            <el-table-column prop="type" label="告警类型">
-              <template #default="{ row }">
-                <el-tag>{{ getAlertTypeName(row.type) }}</el-tag>
-              </template>
-            </el-table-column>
-            <el-table-column prop="enabled" label="启用状态">
-              <template #default="{ row }">
-                <el-switch v-model="row.enabled" />
-              </template>
-            </el-table-column>
-            <el-table-column label="Webhook / 邮箱">
-              <template #default="{ row }">
-                <el-input
-                  v-if="row.type === 'email'"
-                  v-model="row.alert_email"
-                  placeholder="alert@example.com"
-                />
-                <el-input
-                  v-else
-                  v-model="row.webhook_url"
-                  placeholder="https://..."
-                />
-              </template>
-            </el-table-column>
-          </el-table>
-          <el-button
-            type="primary"
-            :loading="alertSaving"
-            style="margin-top: 12px"
-            @click="saveAlerts"
-          >
-            保存告警配置
-          </el-button>
-        </el-card>
-      </el-tab-pane>
     </el-tabs>
   </div>
 </template>
@@ -164,14 +100,12 @@ export default {
     const activeTab = ref('critical')
     const criticalFiles = ref([])
     const whitelistDirs = ref([])
-    const alertConfigs = ref([])
     const protect = ref({
       auto_restore: true,
       lock_critical_files: true
     })
     const lockBusy = ref(false)
     const lockStatusText = ref('')
-    const alertSaving = ref(false)
     
     const loadCriticalFiles = async () => {
       try {
@@ -188,15 +122,6 @@ export default {
         whitelistDirs.value = data
       } catch (error) {
         ElMessage.error('加载白名单目录失败')
-      }
-    }
-    
-    const loadAlertConfigs = async () => {
-      try {
-        const data = await api.get('/config/alert-config')
-        alertConfigs.value = data
-      } catch (error) {
-        ElMessage.error('加载告警配置失败')
       }
     }
     
@@ -281,35 +206,6 @@ export default {
         lockBusy.value = false
       }
     }
-
-    const saveAlerts = async () => {
-      alertSaving.value = true
-      try {
-        const data = await api.put('/config/alert-config', {
-          channels: alertConfigs.value.map((row) => ({
-            id: row.id,
-            enabled: row.enabled,
-            webhook_url: row.webhook_url,
-            alert_email: row.alert_email
-          }))
-        })
-        alertConfigs.value = data.channels || []
-        ElMessage.success('告警配置已保存')
-      } catch (error) {
-        ElMessage.error('保存告警配置失败')
-      } finally {
-        alertSaving.value = false
-      }
-    }
-    
-    const getAlertTypeName = (type) => {
-      const map = {
-        email: '邮件',
-        wechat: '企业微信',
-        dingtalk: '钉钉'
-      }
-      return map[type] || type
-    }
     
     const reloadSiteScoped = () => {
       if (!currentSiteId.value) return
@@ -321,23 +217,17 @@ export default {
     watch(currentSiteId, reloadSiteScoped)
 
     onMounted(() => {
-      loadAlertConfigs()
       reloadSiteScoped()
     })
     
     return {
-      currentSiteId,
       activeTab,
       criticalFiles,
       whitelistDirs,
-      alertConfigs,
       handleAddCriticalFile,
       handleDeleteCriticalFile,
       handleAddWhitelistDir,
       handleDeleteWhitelistDir,
-      alertSaving,
-      saveAlerts,
-      getAlertTypeName,
       protect,
       lockBusy,
       lockStatusText,
@@ -370,4 +260,3 @@ export default {
   white-space: pre-wrap;
 }
 </style>
-
