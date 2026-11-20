@@ -65,7 +65,7 @@
         <el-alert
           type="info"
           :closable="false"
-          title="告警渠道请在「配置 → 告警配置」中全局设置"
+          title="告警渠道请在「全局告警」中设置"
           style="margin-bottom: 12px"
         />
         <el-form-item label="锁定关键文件">

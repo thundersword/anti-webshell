@@ -22,7 +22,7 @@ sudo ./manage_sites.sh install
 sudo ./manage_sites.sh add-site blog /www/wwwroot/blog thinkphp
 ```
 
-告警请在控制面 GUI **配置 → 告警配置** 中全局设置（对所有站点与 `controlplane` 生效）。`add-site` / `render_site_config.sh` 的 `--alert-email`、`--wechat-webhook`、`--dingtalk-webhook` 仍会传给渲染脚本，便于无 GUI 时首建站点 conf；**以 GUI 保存的全局告警为准**，保存后会 fan-out 并重渲染各站。
+告警请在控制面 GUI **全局告警**（`/alerts`）中设置（对所有站点与 `controlplane` 生效）。`add-site` / `render_site_config.sh` 的 `--alert-email`、`--wechat-webhook`、`--dingtalk-webhook` 仍会传给渲染脚本，便于无 GUI 时首建站点 conf；**以 GUI 保存的全局告警为准**，保存后会 fan-out 并重渲染各站。
 
 ## 配置结构
 
