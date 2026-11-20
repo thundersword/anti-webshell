@@ -5,21 +5,6 @@
         <h2>WebShell 防护系统</h2>
       </div>
       <div class="header-right">
-        <el-select
-          v-if="siteStore.sites.length"
-          v-model="currentSiteId"
-          placeholder="选择站点"
-          size="small"
-          style="width: 160px; margin-right: 16px"
-          @change="onSiteChange"
-        >
-          <el-option
-            v-for="s in siteStore.sites"
-            :key="s.site_id"
-            :label="s.name || s.site_id"
-            :value="s.site_id"
-          />
-        </el-select>
         <el-dropdown @command="handleCommand">
           <span class="user-info">
             <el-icon><User /></el-icon>
@@ -49,17 +34,9 @@
             <el-icon><Folder /></el-icon>
             <span>站点管理</span>
           </el-menu-item>
-          <el-menu-item index="/config">
-            <el-icon><Setting /></el-icon>
-            <span>配置管理</span>
-          </el-menu-item>
-          <el-menu-item index="/monitor">
-            <el-icon><Monitor /></el-icon>
-            <span>实时监控</span>
-          </el-menu-item>
-          <el-menu-item index="/events">
-            <el-icon><Document /></el-icon>
-            <span>事件日志</span>
+          <el-menu-item index="/alerts">
+            <el-icon><Bell /></el-icon>
+            <span>全局告警</span>
           </el-menu-item>
         </el-menu>
       </el-aside>
@@ -72,7 +49,7 @@
 </template>
 
 <script>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useUserStore } from '../store/index.js'
 import { useSiteStore } from '../store/site.js'
@@ -86,23 +63,21 @@ export default {
     const router = useRouter()
     const userStore = useUserStore()
     const siteStore = useSiteStore()
-    const currentSiteId = ref(siteStore.currentSiteId)
 
-    const activeMenu = computed(() => route.path)
+    const activeMenu = computed(() => {
+      const p = route.path
+      if (p.startsWith('/sites')) return '/sites'
+      if (p.startsWith('/alerts')) return '/alerts'
+      return p
+    })
 
     const loadSites = async () => {
       try {
         const data = await api.get('/sites')
         siteStore.setSites(data)
-        currentSiteId.value = siteStore.currentSiteId
       } catch (e) {
         // ignore on first load if unauthenticated edge
       }
-    }
-
-    const onSiteChange = (val) => {
-      siteStore.setCurrentSiteId(val)
-      ElMessage.success(`当前站点: ${val}`)
     }
 
     const handleCommand = (command) => {
@@ -113,21 +88,11 @@ export default {
       }
     }
 
-    watch(
-      () => siteStore.currentSiteId,
-      (v) => {
-        currentSiteId.value = v
-      }
-    )
-
     onMounted(loadSites)
 
     return {
       userStore,
-      siteStore,
-      currentSiteId,
       activeMenu,
-      onSiteChange,
       handleCommand
     }
   }
@@ -180,4 +145,3 @@ export default {
   padding: 20px;
 }
 </style>
-

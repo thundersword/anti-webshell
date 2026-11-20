@@ -27,22 +27,53 @@ const routes = [
         meta: { title: '站点管理' }
       },
       {
+        path: 'sites/:siteId',
+        component: () => import('../views/SiteWorkspace.vue'),
+        props: true,
+        children: [
+          {
+            path: '',
+            name: 'SiteOverview',
+            component: () => import('../views/SiteOverview.vue'),
+            meta: { title: '站点概览' }
+          },
+          {
+            path: 'config',
+            name: 'SiteConfig',
+            component: () => import('../views/Config.vue'),
+            meta: { title: '站点配置' }
+          },
+          {
+            path: 'monitor',
+            name: 'SiteMonitor',
+            component: () => import('../views/Monitor.vue'),
+            meta: { title: '站点监控' }
+          },
+          {
+            path: 'events',
+            name: 'SiteEvents',
+            component: () => import('../views/Events.vue'),
+            meta: { title: '站点事件' }
+          }
+        ]
+      },
+      {
+        path: 'alerts',
+        name: 'Alerts',
+        component: () => import('../views/Alerts.vue'),
+        meta: { title: '全局告警' }
+      },
+      {
         path: 'config',
-        name: 'Config',
-        component: () => import('../views/Config.vue'),
-        meta: { title: '配置管理' }
+        redirect: '/sites'
       },
       {
         path: 'monitor',
-        name: 'Monitor',
-        component: () => import('../views/Monitor.vue'),
-        meta: { title: '实时监控' }
+        redirect: '/sites'
       },
       {
         path: 'events',
-        name: 'Events',
-        component: () => import('../views/Events.vue'),
-        meta: { title: '事件日志' }
+        redirect: '/sites'
       }
     ]
   }
@@ -69,4 +100,3 @@ router.beforeEach((to, from, next) => {
 })
 
 export default router
-
