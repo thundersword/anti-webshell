@@ -23,7 +23,7 @@
         </el-table-column>
         <el-table-column label="操作" width="220">
           <template #default="{ row }">
-            <el-button size="small" @click="selectSite(row)">切换</el-button>
+            <el-button size="small" type="primary" @click="enterSite(row)">进入</el-button>
             <el-button
               v-if="canDelete(row)"
               size="small"
@@ -92,6 +92,7 @@
 
 <script>
 import { ref, onMounted, computed } from 'vue'
+import { useRouter } from 'vue-router'
 import api from '../api/index.js'
 import { useSiteStore } from '../store/site.js'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -99,6 +100,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 export default {
   name: 'Sites',
   setup() {
+    const router = useRouter()
     const siteStore = useSiteStore()
     const loading = ref(false)
     const saving = ref(false)
@@ -191,9 +193,9 @@ export default {
       }
     }
 
-    const selectSite = (row) => {
+    const enterSite = (row) => {
       siteStore.setCurrentSiteId(row.site_id)
-      ElMessage.success(`已切换到站点 ${row.site_id}`)
+      router.push(`/sites/${row.site_id}`)
     }
 
     const canDelete = (row) => row.site_id !== 'controlplane'
@@ -222,7 +224,7 @@ export default {
       openCreate,
       detectFramework,
       createSite,
-      selectSite,
+      enterSite,
       canDelete,
       removeSite
     }

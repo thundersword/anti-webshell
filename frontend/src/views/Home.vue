@@ -73,51 +73,25 @@
       </div>
     </el-card>
 
-    <el-card class="service-card">
+    <el-card class="quick-links-card">
       <template #header>
-        <div class="card-header">
-          <span>服务状态 {{ currentSiteId ? `(${currentSiteId})` : '' }}</span>
-          <div class="service-controls">
-            <el-button
-              type="primary"
-              size="small"
-              :disabled="serviceStatus === 'running'"
-              @click="handleStart"
-            >
-              启动
-            </el-button>
-            <el-button
-              type="danger"
-              size="small"
-              :disabled="serviceStatus === 'stopped'"
-              @click="handleStop"
-            >
-              停止
-            </el-button>
-          </div>
-        </div>
+        <span>快捷入口</span>
       </template>
-      
-      <div class="service-status">
-        <el-tag :type="statusType" size="large">
-          {{ statusText }}
-        </el-tag>
+      <div class="quick-links">
+        <el-button type="primary" @click="$router.push('/sites')">站点管理</el-button>
+        <el-button @click="$router.push('/alerts')">全局告警</el-button>
       </div>
     </el-card>
   </div>
 </template>
 
 <script>
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import api from '../api/index.js'
-import { useSiteStore } from '../store/site.js'
-import { ElMessage } from 'element-plus'
 
 export default {
   name: 'Home',
   setup() {
-    const siteStore = useSiteStore()
-    const currentSiteId = computed(() => siteStore.currentSiteId)
     const stats = ref({
       critical_count: 0,
       warning_count: 0,
@@ -125,8 +99,6 @@ export default {
       week_count: 0
     })
     
-    const serviceStatus = ref('stopped')
-    const loading = ref(false)
     const selfGuardLoading = ref(false)
     const selfGuard = ref(null)
 
@@ -161,33 +133,12 @@ export default {
 
     const lockSummary = computed(() => truncateText(lockSummaryFull.value, 96))
     
-    const statusType = computed(() => {
-      if (serviceStatus.value === 'running') return 'success'
-      if (serviceStatus.value === 'stopped') return 'info'
-      return 'danger'
-    })
-    
-    const statusText = computed(() => {
-      if (serviceStatus.value === 'running') return '运行中'
-      if (serviceStatus.value === 'stopped') return '已停止'
-      return '错误'
-    })
-    
     const loadStats = async () => {
       try {
         const data = await api.get('/events/stats')
         stats.value = data
       } catch (error) {
         console.error('加载统计数据失败', error)
-      }
-    }
-    
-    const loadServiceStatus = async () => {
-      try {
-        const data = await api.get('/service/status')
-        serviceStatus.value = data.status
-      } catch (error) {
-        console.error('加载服务状态失败', error)
       }
     }
 
@@ -203,44 +154,13 @@ export default {
       }
     }
     
-    const handleStart = async () => {
-      loading.value = true
-      try {
-        await api.post('/service/start')
-        ElMessage.success('服务已启动')
-        serviceStatus.value = 'running'
-      } catch (error) {
-        ElMessage.error('启动失败')
-      } finally {
-        loading.value = false
-      }
-    }
-    
-    const handleStop = async () => {
-      loading.value = true
-      try {
-        await api.post('/service/stop')
-        ElMessage.success('服务已停止')
-        serviceStatus.value = 'stopped'
-      } catch (error) {
-        ElMessage.error('停止失败')
-      } finally {
-        loading.value = false
-      }
-    }
-    
     let pollTimer = null
 
     const refresh = () => {
       if (typeof document !== 'undefined' && document.hidden) return
       loadStats()
-      loadServiceStatus()
       loadSelfGuard()
     }
-
-    watch(currentSiteId, () => {
-      refresh()
-    })
 
     onMounted(() => {
       refresh()
@@ -255,14 +175,7 @@ export default {
     })
     
     return {
-      currentSiteId,
       stats,
-      serviceStatus,
-      statusType,
-      statusText,
-      loading,
-      handleStart,
-      handleStop,
       selfGuardLoading,
       selfGuardState,
       selfGuardTagType,
@@ -340,7 +253,7 @@ export default {
 }
 
 .self-guard-card,
-.service-card {
+.quick-links-card {
   margin-top: 20px;
 }
 
@@ -373,15 +286,9 @@ export default {
   color: var(--el-text-color-secondary);
 }
 
-.card-header {
+.quick-links {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.service-status {
-  text-align: center;
-  padding: 20px;
+  flex-wrap: wrap;
+  gap: 12px;
 }
 </style>
-
