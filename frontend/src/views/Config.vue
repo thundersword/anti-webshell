@@ -102,7 +102,14 @@
           <template #header>
             <span>告警配置</span>
           </template>
-          
+
+          <el-alert
+            type="info"
+            :closable="false"
+            title="全局告警：对所有站点与控制面生效"
+            style="margin-bottom: 12px"
+          />
+
           <el-table :data="alertConfigs" style="width: 100%">
             <el-table-column prop="type" label="告警类型">
               <template #default="{ row }">
@@ -111,15 +118,32 @@
             </el-table-column>
             <el-table-column prop="enabled" label="启用状态">
               <template #default="{ row }">
-                <el-switch
-                  v-model="row.enabled"
-                  @change="handleToggleAlert(row)"
+                <el-switch v-model="row.enabled" />
+              </template>
+            </el-table-column>
+            <el-table-column label="Webhook / 邮箱">
+              <template #default="{ row }">
+                <el-input
+                  v-if="row.type === 'email'"
+                  v-model="row.alert_email"
+                  placeholder="alert@example.com"
+                />
+                <el-input
+                  v-else
+                  v-model="row.webhook_url"
+                  placeholder="https://..."
                 />
               </template>
             </el-table-column>
-            <el-table-column prop="webhook_url" label="Webhook URL" />
-            <el-table-column prop="alert_email" label="告警邮箱" />
           </el-table>
+          <el-button
+            type="primary"
+            :loading="alertSaving"
+            style="margin-top: 12px"
+            @click="saveAlerts"
+          >
+            保存告警配置
+          </el-button>
         </el-card>
       </el-tab-pane>
     </el-tabs>
@@ -147,6 +171,7 @@ export default {
     })
     const lockBusy = ref(false)
     const lockStatusText = ref('')
+    const alertSaving = ref(false)
     
     const loadCriticalFiles = async () => {
       try {
@@ -257,12 +282,22 @@ export default {
       }
     }
 
-    const handleToggleAlert = async (row) => {
+    const saveAlerts = async () => {
+      alertSaving.value = true
       try {
-        await api.put(`/config/alert-config/${row.id}`, { enabled: row.enabled })
-        ElMessage.success('更新成功')
+        for (const row of alertConfigs.value) {
+          await api.put(`/config/alert-config/${row.id}`, {
+            enabled: row.enabled,
+            webhook_url: row.webhook_url,
+            alert_email: row.alert_email
+          })
+        }
+        ElMessage.success('告警配置已保存')
+        await loadAlertConfigs()
       } catch (error) {
-        ElMessage.error('更新失败')
+        ElMessage.error('保存告警配置失败')
+      } finally {
+        alertSaving.value = false
       }
     }
     
@@ -275,17 +310,19 @@ export default {
       return map[type] || type
     }
     
-    const reloadAll = () => {
+    const reloadSiteScoped = () => {
       if (!currentSiteId.value) return
       loadCriticalFiles()
       loadWhitelistDirs()
-      loadAlertConfigs()
       loadProtect()
     }
 
-    watch(currentSiteId, reloadAll)
+    watch(currentSiteId, reloadSiteScoped)
 
-    onMounted(reloadAll)
+    onMounted(() => {
+      loadAlertConfigs()
+      reloadSiteScoped()
+    })
     
     return {
       currentSiteId,
@@ -297,7 +334,8 @@ export default {
       handleDeleteCriticalFile,
       handleAddWhitelistDir,
       handleDeleteWhitelistDir,
-      handleToggleAlert,
+      alertSaving,
+      saveAlerts,
       getAlertTypeName,
       protect,
       lockBusy,

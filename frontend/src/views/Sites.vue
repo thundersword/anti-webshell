@@ -62,9 +62,12 @@
             />
           </el-select>
         </el-form-item>
-        <el-form-item label="告警邮箱">
-          <el-input v-model="form.alert_email" />
-        </el-form-item>
+        <el-alert
+          type="info"
+          :closable="false"
+          title="告警渠道请在「配置 → 告警配置」中全局设置"
+          style="margin-bottom: 12px"
+        />
         <el-form-item label="锁定关键文件">
           <el-switch v-model="form.lock_critical_files" />
         </el-form-item>
@@ -106,7 +109,6 @@ export default {
       name: '',
       project_dir: '',
       profile: 'thinkphp5',
-      alert_email: '',
       lock_critical_files: true,
       start: true
     })

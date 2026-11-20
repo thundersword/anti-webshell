@@ -113,9 +113,6 @@ def update_site(site_id):
         "project_dir",
         "profile",
         "node_id",
-        "alert_email",
-        "wechat_webhook",
-        "dingtalk_webhook",
     ):
         if field in data:
             setattr(site, field, data[field])
@@ -125,6 +122,11 @@ def update_site(site_id):
         site.lock_critical_files = bool(data["lock_critical_files"])
     if "enabled" in data:
         site.enabled = bool(data["enabled"])
+    if any(k in data for k in ("alert_email", "wechat_webhook", "dingtalk_webhook")):
+        values = get_global_alert_values()
+        site.alert_email = values["alert_email"]
+        site.wechat_webhook = values["wechat_webhook"]
+        site.dingtalk_webhook = values["dingtalk_webhook"]
     db.session.commit()
     ok, msg = sync_site(site, restart=True)
     payload = site.to_dict(include_lists=True)
