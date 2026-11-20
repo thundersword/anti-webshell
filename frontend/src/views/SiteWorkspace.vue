@@ -7,12 +7,12 @@
       <el-tab-pane label="监控" name="monitor" />
       <el-tab-pane label="事件" name="events" />
     </el-tabs>
-    <router-view />
+    <router-view :key="siteId" />
   </div>
 </template>
 
 <script>
-import { computed, onMounted, watch } from 'vue'
+import { computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useSiteStore } from '../store/site.js'
 import api from '../api/index.js'
@@ -73,16 +73,14 @@ export default {
     }
 
     watch(
-      () => route.params.siteId,
+      () => props.siteId,
       (id) => {
         if (id) {
-          siteStore.setCurrentSiteId(id)
+          verifySite()
         }
       },
       { immediate: true }
     )
-
-    onMounted(verifySite)
 
     return {
       pageTitle,
