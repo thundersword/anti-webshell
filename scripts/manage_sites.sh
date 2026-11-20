@@ -311,6 +311,9 @@ usage() {
   $0 unlock-self
   $0 disable-self [--purge]
 
+  add-site 的 --alert-email / --wechat-webhook / --dingtalk-webhook 仅用于 render；
+  全局告警请在 GUI「配置 → 告警配置」维护。
+
 示例:
   $0 install
   $0 add-site blog /www/wwwroot/blog thinkphp --alert-email admin@example.com

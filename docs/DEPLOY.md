@@ -64,8 +64,7 @@ sudo ./manage_sites.sh install
 ### 添加要防护的站点
 
 ```bash
-sudo ./manage_sites.sh add-site blog /www/wwwroot/blog thinkphp \
-  --alert-email admin@yourdomain.com
+sudo ./manage_sites.sh add-site blog /www/wwwroot/blog thinkphp
 
 # 多站
 sudo ./manage_sites.sh add-site shop /www/wwwroot/shop laravel
@@ -249,7 +248,19 @@ sudo nginx -t && sudo systemctl reload nginx
 
 建议再配 HTTPS（certbot），并将管理站限制为内网 / VPN / IP 白名单。
 
-## 8. 上线验收
+## 8. 全局告警（GUI）
+
+告警渠道在管理界面统一配置，不按站点单独维护：
+
+1. 登录 GUI → **配置** → **告警配置**
+2. 按需启用邮件、企业微信、钉钉并填写渠道参数
+3. 点击「保存告警配置」
+
+保存后会对**所有业务站点**与 `controlplane` 生效：写入数据库全局 `AlertConfig`，并重新渲染各站 `/etc/webshell-monitor/sites/<id>.conf`。
+
+仅 CLI 建站、尚未部署控制面时，可用 `add-site` / `render_site_config.sh` 的 `--alert-email` 等参数写入首版 conf；**上线后以 GUI 全局告警为准**，下次在 GUI 保存会覆盖各站中的告警字段。
+
+## 9. 上线验收
 
 1. **引擎**
    ```bash
@@ -259,13 +270,14 @@ sudo nginx -t && sudo systemctl reload nginx
    ```
 2. **API**：`curl http://127.0.0.1:5000/api/health`
 3. **GUI**：打开 `http://your-monitor.example.com`，用 `.env` 账号登录
-4. **站点同步**：GUI「站点管理」操作后，`sync_status` 应为 `synced`，对应 `webshell-monitor@*` 为 active
-5. **功能抽测**
+4. **全局告警**：「配置 → 告警配置」保存后，抽查某站 `.conf` 中邮件 / Webhook 与 GUI 一致
+5. **站点同步**：GUI「站点管理」操作后，`sync_status` 应为 `synced`，对应 `webshell-monitor@*` 为 active
+6. **功能抽测**
    - 非白名单目录创建含 `eval(` 的 `.php` → 进入 `/var/quarantine/<site_id>/`
    - 非白名单目录创建普通 `.txt`（无恶意特征）→ 引擎日志含「监控目录新增文件」，并触发告警
    - 修改关键文件 → 自动恢复（`AUTO_RESTORE=true`）
 
-## 9. 日常运维
+## 10. 日常运维
 
 ```bash
 # 站点
@@ -306,12 +318,12 @@ sudo /opt/webshell_monitor/manage_sites.sh lock-self
 sudo systemctl restart webshell-api webshell-monitor@controlplane
 ```
 
-## 10. 安全清单
+## 11. 安全清单
 
 - [ ] 修改默认管理员密码；轮换 `SECRET_KEY` / `JWT_SECRET_KEY`
 - [ ] 管理界面不裸奔公网（防火墙 / VPN / IP 限制）
 - [ ] `WEBSHELL_DRY_RUN=0`
-- [ ] 配置告警（邮件 / 企业微信 / 钉钉）
+- [ ] 在 GUI「配置 → 告警配置」中配置全局告警（邮件 / 企业微信 / 钉钉）
 - [ ] 定期备份 MySQL（或 sqlite）与 `/var/webshell_backup/`
 - [ ] 控制面已 `ensure-self`；Nginx 对 UI 根目录无 PHP / fastcgi
 - [ ] 关键文件锁定（`chattr +i`）开启后，发版须先 `unlock-self` 再 `lock-self`
@@ -324,5 +336,5 @@ sudo systemctl restart webshell-api webshell-monitor@controlplane
   → MySQL + backend .env + gunicorn systemd
   → ensure-self（控制面自保）
   → frontend build → Nginx 仅静态 + /api 反代（禁止 PHP）
-  → 登录 GUI 验收
+  → 登录 GUI → 配置 → 告警配置（全局）→ 验收
 ```
