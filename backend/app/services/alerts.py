@@ -20,7 +20,7 @@ def ensure_global_alert_rows() -> list[AlertConfig]:
     if len(rows) == 3:
         return [rows[t] for t in CHANNEL_TYPES]
 
-    # Seed from first site that has values
+    # Seed each channel from the first site that has that channel (scan all sites).
     email = wechat = dingtalk = ""
     for site in Site.query.order_by(Site.id.asc()).all():
         if not email and site.alert_email:
@@ -29,7 +29,7 @@ def ensure_global_alert_rows() -> list[AlertConfig]:
             wechat = site.wechat_webhook or ""
         if not dingtalk and site.dingtalk_webhook:
             dingtalk = site.dingtalk_webhook or ""
-        if email or wechat or dingtalk:
+        if email and wechat and dingtalk:
             break
 
     seeds_data = {

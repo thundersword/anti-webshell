@@ -285,15 +285,16 @@ export default {
     const saveAlerts = async () => {
       alertSaving.value = true
       try {
-        for (const row of alertConfigs.value) {
-          await api.put(`/config/alert-config/${row.id}`, {
+        const data = await api.put('/config/alert-config', {
+          channels: alertConfigs.value.map((row) => ({
+            id: row.id,
             enabled: row.enabled,
             webhook_url: row.webhook_url,
             alert_email: row.alert_email
-          })
-        }
+          }))
+        })
+        alertConfigs.value = data.channels || []
         ElMessage.success('告警配置已保存')
-        await loadAlertConfigs()
       } catch (error) {
         ElMessage.error('保存告警配置失败')
       } finally {

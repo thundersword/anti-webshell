@@ -97,6 +97,44 @@ def list_alert_config():
     return jsonify([r.to_dict() for r in rows])
 
 
+def _apply_alert_row_fields(row: AlertConfig, data: dict) -> None:
+    if "enabled" in data:
+        row.enabled = bool(data["enabled"])
+    if "webhook_url" in data:
+        row.webhook_url = data["webhook_url"]
+    if "alert_email" in data:
+        row.alert_email = data["alert_email"]
+
+
+@api_bp.put("/config/alert-config")
+@jwt_required()
+def update_alert_config_batch():
+    """Update multiple global channels then fan-out once."""
+    data = request.get_json(silent=True) or {}
+    channels = data.get("channels") or []
+    ensure_global_alert_rows()
+    by_id = {
+        r.id: r
+        for r in AlertConfig.query.filter(AlertConfig.site_pk.is_(None)).all()
+    }
+    updated = []
+    for item in channels:
+        if not isinstance(item, dict):
+            continue
+        row = by_id.get(item.get("id"))
+        if not row:
+            continue
+        _apply_alert_row_fields(row, item)
+        updated.append(row)
+    db.session.commit()
+    apply_result = apply_global_alerts()
+    return jsonify(
+        channels=[r.to_dict() for r in ensure_global_alert_rows()],
+        apply=apply_result,
+        updated=len(updated),
+    )
+
+
 @api_bp.put("/config/alert-config/<int:item_id>")
 @jwt_required()
 def update_alert_config(item_id):
@@ -104,12 +142,7 @@ def update_alert_config(item_id):
     if not row or row.site_pk is not None:
         return jsonify(error="不存在"), 404
     data = request.get_json(silent=True) or {}
-    if "enabled" in data:
-        row.enabled = bool(data["enabled"])
-    if "webhook_url" in data:
-        row.webhook_url = data["webhook_url"]
-    if "alert_email" in data:
-        row.alert_email = data["alert_email"]
+    _apply_alert_row_fields(row, data)
     db.session.commit()
     apply_global_alerts()
     return jsonify(row.to_dict())
