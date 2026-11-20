@@ -138,9 +138,7 @@ def service_unlock():
     return jsonify(message="unlocked", site_id=site.site_id, detail=result.stdout)
 
 
-@api_bp.get("/service/self-guard")
-@jwt_required()
-def self_guard_status():
+def _self_guard_payload():
     site_id = CONTROLPLANE_ID
     site = Site.query.filter_by(site_id=site_id).first()
     executor = get_executor_for_node(site.node_id if site else "local")
@@ -164,13 +162,21 @@ def self_guard_status():
         lock_result = lock_fn(site_id)
         lock_status = (lock_result.data or {}).get("status") or lock_result.stdout or ""
 
-    return jsonify(
-        site_id=site_id,
-        unit_active=unit_active,
-        lock_status=lock_status,
-        project_dir=project_dir,
-        watch_dirs=_read_watch_dirs(watch_path),
-    )
+    return {
+        "site_id": site_id,
+        "unit_active": unit_active,
+        "lock_status": lock_status,
+        "project_dir": project_dir,
+        "watch_dirs": _read_watch_dirs(watch_path),
+    }
+
+
+@api_bp.get("/self-guard")
+@api_bp.get("/service/self-guard")
+@jwt_required()
+def self_guard_status():
+    """Control-plane status; ignore any site_id / X-Site-Id on the request."""
+    return jsonify(_self_guard_payload())
 
 
 @api_bp.get("/service/lock-status")

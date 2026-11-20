@@ -270,7 +270,11 @@ sudo nginx -t && sudo systemctl reload nginx
    sudo journalctl -u webshell-monitor@blog -n 50
    sudo /opt/webshell_monitor/webshell_monitor.sh --site blog --report
    ```
-2. **API**：`curl http://127.0.0.1:5000/api/health`
+2. **API**：`curl http://127.0.0.1:5000/api/health`  
+   自保：`curl -s -H "Authorization: Bearer <token>" http://127.0.0.1:5000/api/self-guard`  
+   本机 200、经域名却 404 → 检查 Nginx `location /api/` 是否反代到 `127.0.0.1:5000`（宝塔勿让静态站点抢走 `/api`）。  
+   自保接口（需登录 Token）：`curl -H "Authorization: Bearer <token>" http://127.0.0.1:5000/api/self-guard`  
+   若本机 200、经域名却 404，检查 Nginx `location /api/` 是否反代到 `127.0.0.1:5000`（宝塔勿让静态站点抢走 `/api`）。
 3. **GUI**：打开 `http://your-monitor.example.com`，用 `.env` 账号登录
 4. **全局告警**：「配置 → 告警配置」保存后，抽查某站 `.conf` 中邮件 / Webhook 与 GUI 一致
 5. **站点同步**：GUI「站点管理」操作后，`sync_status` 应为 `synced`，对应 `webshell-monitor@*` 为 active

@@ -9,6 +9,7 @@ const api = axios.create({
 
 /** Paths that are host-global — never attach current site_id / X-Site-Id. */
 const GLOBAL_API_PATHS = [
+  '/self-guard',
   '/service/self-guard',
   '/config/alert-config',
   '/profiles',
@@ -16,8 +17,18 @@ const GLOBAL_API_PATHS = [
   '/health'
 ]
 
+function normalizeApiPath(url = '') {
+  let path = String(url).split('?')[0]
+  if (path.startsWith('/api/')) {
+    path = path.slice(4)
+  } else if (path === '/api') {
+    path = '/'
+  }
+  return path
+}
+
 function isGlobalApiPath(url = '') {
-  const path = String(url).split('?')[0]
+  const path = normalizeApiPath(url)
   return GLOBAL_API_PATHS.some(
     (prefix) => path === prefix || path.startsWith(prefix)
   )
@@ -53,16 +64,19 @@ api.interceptors.response.use(
   (error) => {
     if (error.response) {
       const { status, data } = error.response
-      
+      const silent = error.config?.skipErrorToast
+
       if (status === 401) {
         localStorage.removeItem('access_token')
         router.push('/login')
-        ElMessage.error('登录已过期，请重新登录')
-      } else {
-        ElMessage.error(data.error || '请求失败')
+        if (!silent) {
+          ElMessage.error('登录已过期，请重新登录')
+        }
+      } else if (!silent) {
+        ElMessage.error((data && data.error) || `请求失败 (${status})`)
       }
     }
-    
+
     return Promise.reject(error)
   }
 )

@@ -194,7 +194,7 @@ export default {
     const loadSelfGuard = async () => {
       selfGuardLoading.value = true
       try {
-        selfGuard.value = await api.get('/service/self-guard')
+        selfGuard.value = await api.get('/self-guard', { skipErrorToast: true })
       } catch (error) {
         console.error('加载自保状态失败', error)
         selfGuard.value = null
