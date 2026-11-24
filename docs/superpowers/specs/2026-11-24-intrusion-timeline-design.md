@@ -100,8 +100,8 @@ SITE_HOSTS=""
 
 1. 对每个站点收集监控根：存在 `<站点>.watch` 时用其中的绝对路径，否则用 `PROJECT_DIR`。
 2. 排除目录来自该 Profile 的 `INOTIFY_EXCLUDE` 以及引擎 `is_noisy_path` 已跳过的路径段（`.git`、`vendor`、`runtime`、`Runtime`、`storage/framework`、`storage/logs`、`bootstrap/cache`）。**不使用白名单目录**，上传目录仍要审计。
-3. 每个排除目录写在前面：`-a never,exit -F dir=<path> -k webshell_exclude`。
-4. 每个监控根随后写两条：`arch=b64` 与 `arch=b32` 的 `-a always,exit -F dir=<path> -F perm=wa -k webshell_write`。
+3. 每个排除目录写在前面：`-a never,exit -F dir=<path> -k webshell_exclude`。目录不存在则跳过，因为 `auditctl` 会在这一行停止加载后面的规则。含 `$` 的文件名后缀（如 `\.db$`）不写成目录规则。
+4. 每个存在的监控根随后写两条：`arch=b64` 与 `arch=b32` 的 `-a always,exit -F dir=<path> -F perm=wa -k webshell_write`。监控根本身不存在时，该根的规则整段跳过。
 5. 读取 `/etc/webshell-monitor/audit.local.rules`（不存在则跳过）。修剪空白后以 `-a never` 或 `-A never` 开头的行，按原顺序写在两条文件头注释之后、任何生成的 `-a always,exit` 之前；其余行按原顺序接在生成规则末尾。升级、建站、删站都不改该文件。
 6. 写入 `/etc/audit/rules.d/webshell.rules`（文件头注释写明会被覆盖），执行 `augenrules --load`。
 

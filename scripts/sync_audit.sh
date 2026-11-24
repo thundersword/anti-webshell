@@ -2,6 +2,8 @@
 # Rewrite /etc/audit/rules.d/webshell.rules from site confs.
 # never rules in audit.local.rules are placed before generated always rules.
 # Every other local line is appended after the generated rules, unchanged.
+# auditctl rejects -F dir= when that directory does not exist and then stops
+# loading, so missing directories are left out of the generated file.
 set -euo pipefail
 
 CONFIG_ROOT="${CONFIG_ROOT:-/etc/webshell-monitor/sites}"
@@ -15,6 +17,28 @@ fi
 
 NOISY_RELS=(.git vendor runtime Runtime storage/framework storage/logs bootstrap/cache)
 
+# Print the directory from a `-F dir=` field, or nothing when the line has none.
+rule_dir() {
+  local line=$1 dir
+  case "$line" in
+    *-F\ dir=*)
+      dir="${line#*-F dir=}"
+      printf '%s' "${dir%% *}"
+      ;;
+  esac
+}
+
+# Missing directories make augenrules abort the whole file at that line.
+keep_rule_line() {
+  local line=$1 dir
+  dir="$(rule_dir "$line")"
+  if [ -n "$dir" ] && [ ! -d "$dir" ]; then
+    echo "sync-audit: skip missing dir: $dir" >&2
+    return 1
+  fi
+  return 0
+}
+
 local_never_lines=()
 local_other_lines=()
 if [ -f "$LOCAL_RULES" ]; then
@@ -22,9 +46,11 @@ if [ -f "$LOCAL_RULES" ]; then
     trimmed="${line#"${line%%[![:space:]]*}"}"
     case "$trimmed" in
       -a\ never*|-A\ never*)
+        keep_rule_line "$line" || continue
         local_never_lines+=("$line")
         ;;
       *)
+        keep_rule_line "$line" || continue
         local_other_lines+=("$line")
         ;;
     esac
@@ -41,7 +67,7 @@ exclude_rels() {
   printf '%s' "$exclude" | tr '|' '\n' | sed -E 's/\\//g; s/^\(?//; s/\)?$//; s/^\/+//; s/\/+$//' | while IFS= read -r token || [ -n "$token" ]; do
     [ -n "$token" ] || continue
     case "$token" in
-      *'*'|*'?'*|*'^'*|*'('*|*')'*) continue ;;
+      *'*'|*'?'*|*'^'*|*'('*|*')'*|*'$'*) continue ;;
     esac
     case "$seen" in
       *" $token "*) continue ;;
@@ -81,9 +107,17 @@ exclude_rels() {
     done < <(exclude_rels "${INOTIFY_EXCLUDE:-}")
     for root in "${roots[@]}"; do
       root="${root%/}"
+      if [ ! -d "$root" ]; then
+        echo "sync-audit: skip missing dir: $root" >&2
+        continue
+      fi
       nevers=()
       for rel in "${rels[@]}"; do
         [ -n "$rel" ] || continue
+        if [ ! -d "${root}/${rel}" ]; then
+          echo "sync-audit: skip missing dir: ${root}/${rel}" >&2
+          continue
+        fi
         nevers+=("-a never,exit -F dir=${root}/${rel} -k webshell_exclude")
       done
       if [ "${#nevers[@]}" -gt 0 ]; then

@@ -75,7 +75,7 @@ sudo /opt/webshell_monitor/manage_sites.sh sync-audit
 sudo auditctl -l | grep webshell
 ```
 
-不要手改 `/etc/audit/rules.d/webshell.rules`（下次 `sync-audit` 会覆盖）。不要在规则里写 `-e 2`。升级、建站、删站都不改 `audit.local.rules`。本地文件里的 `never` 规则会排到生成的 `always` 规则之前，其余行仍接在末尾，这样目录排除才会生效。
+不要手改 `/etc/audit/rules.d/webshell.rules`（下次 `sync-audit` 会覆盖）。不要在规则里写 `-e 2`。升级、建站、删站都不改 `audit.local.rules`。本地文件里的 `never` 规则会排到生成的 `always` 规则之前，其余行仍接在末尾，这样目录排除才会生效。目录当时不存在的排除项会被跳过，否则 `auditctl` 会在这一行停止加载；目录建好后重新执行 `sync-audit`。
 
 控制面自保 `ensure-self` **不要在这里立刻执行**：引擎要求 UI 根目录（`WEBSHELL_UI_ROOT`，默认 `/www/wwwroot/anti-webshell`）已存在。请先完成第 6 节前端部署，再按「控制面自保」小节启用。
 
