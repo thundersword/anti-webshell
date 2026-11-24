@@ -458,6 +458,17 @@ record_investigate_command() {
     printf '%s\n' "$line" >> "$dest" 2>/dev/null || true
 }
 
+# Timeline directory or anchor could not be written. Log and alert, do not launch.
+report_investigation_unavailable() {
+    local why=$1
+    local target_file=$2
+    local incident=$3
+    log_message "CRITICAL" "未能生成入侵时间线 incident=${incident} 原因: ${why}"
+    send_alert "未能生成入侵时间线 [${SITE_ID}]" "未能生成入侵时间线 [${SITE_ID}]
+文件: ${target_file}
+原因: ${why}"
+}
+
 # Write the anchor, then start analysis without waiting.
 # Args: file quarantine_path reason [incident_id] [event_time]
 launch_investigation() {
@@ -489,7 +500,7 @@ launch_investigation() {
     dir="$root/${SITE_ID}"
     anchor_path="$dir/${incident_id}.anchor.json"
     if ! mkdir -p "$dir" 2>/dev/null; then
-        log_message "ERROR" "无法创建事件目录: $dir"
+        report_investigation_unavailable "无法创建事件目录" "$file" "$incident_id"
         return 0
     fi
 
@@ -533,7 +544,7 @@ Path(os.environ["ANCHOR_PATH"]).write_text(
 )
 PY
     then
-        log_message "ERROR" "无法写入入侵锚点: $anchor_path"
+        report_investigation_unavailable "无法写入入侵锚点" "$file" "$incident_id"
         return 0
     fi
 
@@ -1141,6 +1152,49 @@ EOF
     fi
     if grep -q 'systemd-run' "$command_log"; then
         echo "FAIL: command log contains systemd-run" >&2
+        rm -rf "$tmp"
+        return 1
+    fi
+
+    # mkdir failure must alert and must not launch analysis.
+    local blocked fail_file command_bytes fail_subject fail_body
+    local want_subject want_body
+    blocked="$tmp/not-a-directory"
+    printf 'x\n' > "$blocked"
+    WEBSHELL_INCIDENTS_DIR="$blocked"
+    fail_file="/www/wwwroot/blog/public/x.php"
+    command_bytes=$(wc -c < "$command_log" | tr -d ' ')
+    send_alert() {
+        printf '%s\n' "$1" > "$tmp/fail-subject"
+        printf '%s\n' "$2" > "$tmp/fail-body"
+    }
+    launch_investigation "$fail_file" "$tmp/quarantine/x.php" "无法创建事件目录"
+    if ! grep -q '\[CRITICAL\].*未能生成入侵时间线 incident=.*无法创建事件目录' "$LOG_FILE"; then
+        echo "FAIL: mkdir failure log missing incident reason" >&2
+        rm -rf "$tmp"
+        return 1
+    fi
+    if [ "$(wc -c < "$command_log" | tr -d ' ')" != "$command_bytes" ] || grep -q 'systemd-run' "$command_log"; then
+        echo "FAIL: mkdir failure recorded systemd-run" >&2
+        rm -rf "$tmp"
+        return 1
+    fi
+    want_subject="未能生成入侵时间线 [blog]"
+    want_body="未能生成入侵时间线 [blog]
+文件: ${fail_file}
+原因: 无法创建事件目录"
+    fail_subject=$(cat "$tmp/fail-subject" 2>/dev/null || true)
+    fail_body=$(cat "$tmp/fail-body" 2>/dev/null || true)
+    printf '%s\n' "$want_subject" > "$tmp/want-subject"
+    printf '%s\n' "$want_body" > "$tmp/want-body"
+    if ! cmp -s "$tmp/want-subject" "$tmp/fail-subject"; then
+        echo "FAIL: mkdir failure alert subject: ${fail_subject}" >&2
+        rm -rf "$tmp"
+        return 1
+    fi
+    if ! cmp -s "$tmp/want-body" "$tmp/fail-body"; then
+        echo "FAIL: mkdir failure alert body:" >&2
+        printf '%s\n' "$fail_body" >&2
         rm -rf "$tmp"
         return 1
     fi

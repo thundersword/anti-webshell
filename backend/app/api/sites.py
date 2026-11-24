@@ -172,6 +172,14 @@ def delete_site(site_id):
         return jsonify(error="站点不存在"), 404
     executor = get_executor_for_node(site.node_id)
     executor.remove_site_config(site.site_id)
+    # Conf is already gone. Reload rules so the removed site drops out.
+    # A failed or raising sync must not block the database delete.
+    sync_audit = getattr(executor, "sync_audit", None)
+    if callable(sync_audit):
+        try:
+            sync_audit()
+        except Exception:
+            pass
     db.session.delete(site)
     db.session.commit()
     return jsonify(message="deleted")

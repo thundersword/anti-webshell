@@ -70,6 +70,11 @@ def _ingest_from_log(site: Site, limit: int = 200, force: bool = False):
             event_type = "file_create"
         if ":" in msg:
             maybe = msg.rsplit(":", 1)[-1].strip()
+            if " -> " in maybe:
+                maybe = maybe.split(" -> ", 1)[0]
+            if " incident=" in maybe:
+                maybe = maybe.split(" incident=", 1)[0]
+            maybe = maybe.strip()
             if maybe.startswith("/"):
                 file_path = maybe
         incident_match = INCIDENT_RE.search(msg)

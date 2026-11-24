@@ -186,6 +186,79 @@ def test_lock_dry_run(client, tmp_path):
     assert body["message"] == "locked"
 
 
+def _create_plain_site(client, headers, project, site_id):
+    project.mkdir()
+    created = client.post("/api/sites", headers=headers, json={
+        "site_id": site_id,
+        "name": site_id,
+        "project_dir": str(project),
+        "profile": "plain_php",
+        "start": False,
+    })
+    assert created.status_code == 201, created.get_data(as_text=True)
+    return created
+
+
+def test_delete_site_reloads_audit_rules(client, tmp_path, monkeypatch):
+    headers = _login(client)
+    _create_plain_site(client, headers, tmp_path / "web", "blog")
+    conf = Path(os.environ["WEBSHELL_CONFIG_ROOT"]) / "blog.conf"
+    assert conf.is_file()
+
+    from app.executor.base import ExecResult
+    from app.executor.local import LocalSystemdExecutor
+
+    seen = {"n": 0, "conf_exists": None}
+
+    def ok_sync(self):
+        seen["n"] += 1
+        seen["conf_exists"] = conf.exists()
+        return ExecResult(ok=True, message="ok")
+
+    monkeypatch.setattr(LocalSystemdExecutor, "sync_audit", ok_sync)
+    resp = client.delete("/api/sites/blog", headers=headers)
+    assert resp.status_code == 200
+    assert resp.get_json()["message"] == "deleted"
+    assert seen["n"] == 1
+    assert seen["conf_exists"] is False
+
+    from app.models import Site
+
+    with client.application.app_context():
+        assert Site.query.filter_by(site_id="blog").first() is None
+
+
+def test_delete_site_survives_sync_audit_failure(client, tmp_path, monkeypatch):
+    headers = _login(client)
+    _create_plain_site(client, headers, tmp_path / "web", "blog")
+
+    from app.executor.base import ExecResult
+    from app.executor.local import LocalSystemdExecutor
+    from app.models import Site
+
+    def failed_sync(self):
+        return ExecResult(ok=False, message="exit 1")
+
+    monkeypatch.setattr(LocalSystemdExecutor, "sync_audit", failed_sync)
+    resp = client.delete("/api/sites/blog", headers=headers)
+    assert resp.status_code == 200
+    assert resp.get_json()["message"] == "deleted"
+    with client.application.app_context():
+        assert Site.query.filter_by(site_id="blog").first() is None
+
+    _create_plain_site(client, headers, tmp_path / "web2", "shop")
+
+    def raising_sync(self):
+        raise RuntimeError("audit down")
+
+    monkeypatch.setattr(LocalSystemdExecutor, "sync_audit", raising_sync)
+    resp = client.delete("/api/sites/shop", headers=headers)
+    assert resp.status_code == 200
+    assert resp.get_json()["message"] == "deleted"
+    with client.application.app_context():
+        assert Site.query.filter_by(site_id="shop").first() is None
+
+
 def test_cannot_delete_controlplane(client):
     headers = _login(client)
     from app.models import Site, db
@@ -359,6 +432,8 @@ def test_timeline_pending_then_ready_then_missing(client, tmp_path, monkeypatch)
         or "bbbbbbbb" in (e.get("message") or "")
     )
     assert recent_row["incident_id"] == "20261124T034211Z_ab12cd34"
+    assert recent_row["file_path"] == "/tmp/a.php"
+    assert old_row["file_path"] == "/tmp/b.php"
     pending = client.get(f"/api/events/{recent_row['id']}/timeline?site_id=blog", headers=headers)
     assert pending.status_code == 202
     assert pending.get_json()["status"] == "pending"
