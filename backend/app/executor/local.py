@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -13,6 +14,11 @@ from flask import current_app
 from .base import ExecResult, Executor, SiteRuntimeConfig
 
 SITE_ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]*$")
+# Incident ids are YYYYmmddTHHMMSSZ_<8 hex>, so '_' is required. The path
+# check still rejects separators other than that single underscore class.
+INCIDENT_ID_RE = re.compile(r"^[A-Za-z0-9_]{1,64}$")
+SYNC_AUDIT_COMMAND = "sudo /opt/webshell_monitor/manage_sites.sh sync-audit"
+CHECK_AUDIT_COMMAND = "sudo auditctl -l | grep webshell"
 _STATUS_CACHE = {}
 _STATUS_TTL = 5.0
 
@@ -357,23 +363,133 @@ class LocalSystemdExecutor(Executor):
                 path.unlink()
         return ExecResult(ok=True, message="removed")
 
-    def tail_logs(self, site_id: str, lines: int = 100) -> ExecResult:
+    def _configured_log_file(self, site_id: str) -> Path:
+        """Use a LOG_FILE= path that exists; otherwise the last declared path."""
         log_file = Path(f"/var/log/webshell/{site_id}.log")
-        # Allow override via conf
         conf = self.config_root / f"{site_id}.conf"
-        if conf.exists():
-            for line in conf.read_text(encoding="utf-8").splitlines():
-                if line.startswith("LOG_FILE="):
-                    log_file = Path(line.split("=", 1)[1].strip().strip('"'))
-                    break
-        if self.dry_run and not log_file.exists():
+        if not conf.exists():
+            return log_file
+        fallback = None
+        existing = None
+        for line in conf.read_text(encoding="utf-8", errors="replace").splitlines():
+            stripped = line.strip()
+            if not stripped.startswith("LOG_FILE="):
+                continue
+            raw = stripped.split("=", 1)[1].strip().strip('"').strip("'")
+            if not raw:
+                continue
+            candidate = Path(raw)
+            fallback = candidate
+            if candidate.exists():
+                existing = candidate
+        return existing or fallback or log_file
+
+    def tail_logs(self, site_id: str, lines: int = 100) -> ExecResult:
+        log_file = self._configured_log_file(site_id)
+        if log_file.exists():
+            return ExecResult(ok=True, data={"logs": tail_n_lines(log_file, lines)})
+        if self.dry_run:
             return ExecResult(
                 ok=True,
                 data={"logs": [f"[dry-run] no log yet for {site_id}"]},
             )
-        if not log_file.exists():
-            return ExecResult(ok=True, data={"logs": []})
-        return ExecResult(ok=True, data={"logs": tail_n_lines(log_file, lines)})
+        return ExecResult(ok=True, data={"logs": []})
+
+    def _project_dir_from_conf(self, site_id: str) -> str:
+        conf = self.config_root / f"{site_id}.conf"
+        if not conf.is_file():
+            return ""
+        for line in conf.read_text(encoding="utf-8", errors="replace").splitlines():
+            stripped = line.strip()
+            if stripped.startswith("PROJECT_DIR="):
+                return stripped.split("=", 1)[1].strip().strip('"')
+        return ""
+
+    def read_incident(self, site_id: str, incident_id: str) -> ExecResult:
+        if not site_id or not SITE_ID_RE.match(site_id):
+            return ExecResult(ok=False, message="invalid site_id")
+        if not incident_id or not INCIDENT_ID_RE.match(incident_id):
+            return ExecResult(ok=False, message="invalid incident_id")
+        root = os.environ.get("WEBSHELL_INCIDENTS_DIR") or ""
+        if not root:
+            try:
+                root = current_app.config.get("WEBSHELL_INCIDENTS_DIR") or ""
+            except Exception:  # noqa: BLE001
+                root = ""
+        root_path = Path(root or "/var/lib/webshell/incidents")
+        path = root_path / site_id / f"{incident_id}.json"
+        if not path.is_file():
+            return ExecResult(ok=False, message="missing")
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            return ExecResult(ok=False, message=str(exc))
+        if not isinstance(payload, dict):
+            return ExecResult(ok=False, message="invalid timeline")
+        return ExecResult(ok=True, data={"timeline": payload})
+
+    def audit_status(self, site_id: str) -> ExecResult:
+        data = {
+            "auditd": "unknown",
+            "rules_loaded": False,
+            "sync_command": SYNC_AUDIT_COMMAND,
+            "check_command": CHECK_AUDIT_COMMAND,
+        }
+        if self.dry_run:
+            return ExecResult(ok=True, message="dry-run", data=data)
+        try:
+            proc = subprocess.run(
+                ["systemctl", "is-active", "auditd"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+            data["auditd"] = (proc.stdout or "").strip() or "unknown"
+        except Exception:  # noqa: BLE001
+            data["auditd"] = "unknown"
+        output = ""
+        try:
+            rules = subprocess.run(
+                ["auditctl", "-l"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+            output = rules.stdout or ""
+        except Exception:  # noqa: BLE001
+            output = ""
+        project_dir = self._project_dir_from_conf(site_id)
+        data["rules_loaded"] = bool(
+            project_dir and "webshell_write" in output and project_dir in output
+        )
+        return ExecResult(ok=True, data=data)
+
+    def sync_audit(self) -> ExecResult:
+        script = self.install_dir / "sync_audit.sh"
+        if self.dry_run:
+            return self._run([str(script)])
+        env = os.environ.copy()
+        env["CONFIG_ROOT"] = str(self.config_root)
+        try:
+            proc = subprocess.run(
+                [str(script)],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                check=False,
+                env=env,
+            )
+            ok = proc.returncode == 0
+            return ExecResult(
+                ok=ok,
+                message="ok" if ok else f"exit {proc.returncode}",
+                stdout=proc.stdout or "",
+                stderr=proc.stderr or "",
+            )
+        except Exception as exc:  # noqa: BLE001
+            return ExecResult(ok=False, message=str(exc))
 
     def list_quarantine(self, site_id: str) -> ExecResult:
         qdir = Path(f"/var/quarantine/{site_id}")
@@ -425,6 +541,12 @@ class RemoteAgentExecutor(Executor):
         return self._nyi()
 
     def list_profiles(self) -> ExecResult:
+        return self._nyi()
+
+    def read_incident(self, site_id: str, incident_id: str) -> ExecResult:
+        return self._nyi()
+
+    def audit_status(self, site_id: str) -> ExecResult:
         return self._nyi()
 
 

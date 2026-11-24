@@ -54,14 +54,44 @@ def _ensure_schema():
 
     try:
         insp = inspect(db.engine)
-        if not insp.has_table("sites"):
-            return
-        cols = {c["name"] for c in insp.get_columns("sites")}
-        if "lock_critical_files" not in cols:
-            db.session.execute(
-                text("ALTER TABLE sites ADD COLUMN lock_critical_files BOOLEAN DEFAULT 1")
+        if insp.has_table("sites"):
+            cols = {c["name"] for c in insp.get_columns("sites")}
+            statements = []
+            if "lock_critical_files" not in cols:
+                statements.append(
+                    "ALTER TABLE sites ADD COLUMN lock_critical_files BOOLEAN DEFAULT 1"
+                )
+            if "access_log" not in cols:
+                statements.append("ALTER TABLE sites ADD COLUMN access_log VARCHAR(500)")
+            if "site_hosts" not in cols:
+                statements.append("ALTER TABLE sites ADD COLUMN site_hosts VARCHAR(500)")
+            for statement in statements:
+                db.session.execute(text(statement))
+            if statements:
+                db.session.commit()
+        if insp.has_table("monitor_events"):
+            event_cols = {c["name"] for c in insp.get_columns("monitor_events")}
+            if "incident_id" not in event_cols:
+                db.session.execute(
+                    text("ALTER TABLE monitor_events ADD COLUMN incident_id VARCHAR(64)")
+                )
+                db.session.commit()
+                insp = inspect(db.engine)
+            indexed = any(
+                "incident_id" in (idx.get("column_names") or [])
+                for idx in insp.get_indexes("monitor_events")
             )
-            db.session.commit()
+            if not indexed:
+                try:
+                    db.session.execute(
+                        text(
+                            "CREATE INDEX IF NOT EXISTS ix_monitor_events_incident_id "
+                            "ON monitor_events (incident_id)"
+                        )
+                    )
+                    db.session.commit()
+                except Exception:  # noqa: BLE001
+                    db.session.rollback()
     except Exception:  # noqa: BLE001
         db.session.rollback()
 

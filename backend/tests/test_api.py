@@ -287,3 +287,111 @@ def test_global_alert_get_without_sites(client):
     rows = r.get_json()
     assert len(rows) == 3
     assert all(row.get("site_pk") is None for row in rows)
+
+
+def test_site_access_log_roundtrip(client, tmp_path):
+    headers = _login(client)
+    project = tmp_path / "web"
+    project.mkdir()
+    created = client.post("/api/sites", headers=headers, json={
+        "site_id": "blog",
+        "name": "Blog",
+        "project_dir": str(project),
+        "profile": "plain_php",
+        "start": False,
+        "access_log": "/var/log/nginx/blog.log",
+        "site_hosts": "blog.example",
+    })
+    assert created.status_code == 201
+    assert created.get_json()["access_log"] == "/var/log/nginx/blog.log"
+    assert created.get_json()["site_hosts"] == "blog.example"
+    conf = Path(os.environ["WEBSHELL_CONFIG_ROOT"]) / "blog.conf"
+    text = conf.read_text(encoding="utf-8")
+    assert 'ACCESS_LOG="/var/log/nginx/blog.log"' in text
+    assert 'SITE_HOSTS="blog.example"' in text
+
+
+def test_access_log_rejects_relative_path(client, tmp_path):
+    headers = _login(client)
+    project = tmp_path / "web"
+    project.mkdir()
+    created = client.post("/api/sites", headers=headers, json={
+        "site_id": "blog",
+        "name": "Blog",
+        "project_dir": str(project),
+        "profile": "plain_php",
+        "start": False,
+        "access_log": "var/log/nginx/blog.log",
+    })
+    assert created.status_code == 400
+    assert created.get_json()["error"] == "访问日志必须是绝对路径"
+
+
+def test_timeline_pending_then_ready_then_missing(client, tmp_path, monkeypatch):
+    headers = _login(client)
+    project = tmp_path / "web"
+    project.mkdir()
+    client.post("/api/sites", headers=headers, json={
+        "site_id": "blog", "name": "Blog", "project_dir": str(project),
+        "profile": "plain_php", "start": False,
+    })
+    log = tmp_path / "blog.log"
+    from datetime import datetime, timedelta
+    recent = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    old = (datetime.utcnow() - timedelta(seconds=120)).strftime("%Y-%m-%d %H:%M:%S")
+    log.write_text(
+        f"[{recent}] [CRITICAL] [site=blog] 文件已隔离: /tmp/a.php -> /tmp/q incident=20261124T034211Z_ab12cd34\n"
+        f"[{old}] [CRITICAL] [site=blog] 文件已隔离: /tmp/b.php -> /tmp/q2 incident=20261124T000000Z_bbbbbbbb\n",
+        encoding="utf-8",
+    )
+    conf = Path(os.environ["WEBSHELL_CONFIG_ROOT"]) / "blog.conf"
+    conf.write_text(conf.read_text(encoding="utf-8") + f'LOG_FILE="{log}"\n', encoding="utf-8")
+    listed = client.get("/api/events/?site_id=blog", headers=headers)
+    events = listed.get_json()["events"]
+    recent_row = next(
+        e for e in events
+        if e.get("incident_id") == "20261124T034211Z_ab12cd34"
+        or "ab12cd34" in (e.get("message") or "")
+    )
+    old_row = next(
+        e for e in events
+        if e.get("incident_id") == "20261124T000000Z_bbbbbbbb"
+        or "bbbbbbbb" in (e.get("message") or "")
+    )
+    assert recent_row["incident_id"] == "20261124T034211Z_ab12cd34"
+    pending = client.get(f"/api/events/{recent_row['id']}/timeline?site_id=blog", headers=headers)
+    assert pending.status_code == 202
+    assert pending.get_json()["status"] == "pending"
+    incidents = tmp_path / "incidents" / "blog"
+    incidents.mkdir(parents=True)
+    (incidents / "20261124T034211Z_ab12cd34.json").write_text(
+        '{"incident_id":"20261124T034211Z_ab12cd34","status":"ok","entry":"web_upload","events":[]}',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("WEBSHELL_INCIDENTS_DIR", str(tmp_path / "incidents"))
+    ready = client.get(f"/api/events/{recent_row['id']}/timeline?site_id=blog", headers=headers)
+    assert ready.status_code == 200
+    assert ready.get_json()["entry"] == "web_upload"
+    missing = client.get(f"/api/events/{old_row['id']}/timeline?site_id=blog", headers=headers)
+    assert missing.status_code == 404
+    assert missing.get_json()["status"] == "missing"
+
+
+def test_audit_status_dry_run_commands(client, tmp_path):
+    headers = _login(client)
+    project = tmp_path / "web"
+    project.mkdir()
+    client.post("/api/sites", headers=headers, json={
+        "site_id": "blog",
+        "name": "Blog",
+        "project_dir": str(project),
+        "profile": "plain_php",
+        "start": False,
+    })
+    resp = client.get("/api/service/audit-status?site_id=blog", headers=headers)
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["sync_command"] == "sudo /opt/webshell_monitor/manage_sites.sh sync-audit"
+    assert body["check_command"] == "sudo auditctl -l | grep webshell"
+    assert body["auditd"] == "unknown"
+    assert body["rules_loaded"] is False

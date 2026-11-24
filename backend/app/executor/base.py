@@ -72,3 +72,11 @@ class Executor(ABC):
     @abstractmethod
     def list_profiles(self) -> ExecResult:
         ...
+
+    @abstractmethod
+    def read_incident(self, site_id: str, incident_id: str) -> ExecResult:
+        ...
+
+    @abstractmethod
+    def audit_status(self, site_id: str) -> ExecResult:
+        ...

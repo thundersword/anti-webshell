@@ -19,6 +19,8 @@ def build_runtime_config(site: Site) -> SiteRuntimeConfig:
         alert_email=site.alert_email or "",
         wechat_webhook=site.wechat_webhook or "",
         dingtalk_webhook=site.dingtalk_webhook or "",
+        access_log=getattr(site, "access_log", None) or "",
+        site_hosts=getattr(site, "site_hosts", None) or "",
         critical_files=crit,
         whitelist_dirs=white,
     )
@@ -32,6 +34,10 @@ def sync_site(site: Site, restart: bool = True) -> tuple[bool, str]:
         site.sync_message = result.message or result.stderr
         db.session.commit()
         return False, site.sync_message
+
+    sync_audit = getattr(executor, "sync_audit", None)
+    if callable(sync_audit):
+        sync_audit()
 
     lock_on = bool(getattr(site, "lock_critical_files", True))
     lock_fn = getattr(executor, "apply_file_lock", None)

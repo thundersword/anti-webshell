@@ -69,6 +69,8 @@ class Site(db.Model):
     alert_email = db.Column(db.String(200))
     wechat_webhook = db.Column(db.String(500))
     dingtalk_webhook = db.Column(db.String(500))
+    access_log = db.Column(db.String(500))
+    site_hosts = db.Column(db.String(500))
     enabled = db.Column(db.Boolean, default=True)
     sync_status = db.Column(db.String(20), default="pending")  # pending|synced|error
     sync_message = db.Column(db.Text)
@@ -95,6 +97,8 @@ class Site(db.Model):
             "alert_email": self.alert_email,
             "wechat_webhook": self.wechat_webhook,
             "dingtalk_webhook": self.dingtalk_webhook,
+            "access_log": self.access_log,
+            "site_hosts": self.site_hosts,
             "enabled": self.enabled,
             "sync_status": self.sync_status,
             "sync_message": self.sync_message,
@@ -176,6 +180,7 @@ class MonitorEvent(db.Model):
     severity = db.Column(db.String(20), index=True)
     message = db.Column(db.Text)
     action_taken = db.Column(db.String(100))
+    incident_id = db.Column(db.String(64), index=True)
     created_at = db.Column(db.DateTime, default=utcnow, index=True)
 
     def to_dict(self):
@@ -187,6 +192,7 @@ class MonitorEvent(db.Model):
             "severity": self.severity,
             "message": self.message,
             "action_taken": self.action_taken,
+            "incident_id": self.incident_id,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 

@@ -33,6 +33,18 @@ def _read_watch_dirs(watch_path: Path) -> list:
     return dirs
 
 
+@api_bp.get("/service/audit-status")
+@jwt_required()
+def service_audit_status():
+    site = _current_site()
+    if not site:
+        return jsonify(error="请先创建站点"), 400
+    result = get_executor_for_node(site.node_id).audit_status(site.site_id)
+    if not result.ok:
+        return jsonify(error=result.message or "审计状态获取失败"), 500
+    return jsonify(result.data or {})
+
+
 @api_bp.get("/service/status")
 @jwt_required()
 def service_status():

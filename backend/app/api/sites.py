@@ -11,6 +11,18 @@ from . import api_bp
 CONTROLPLANE_ID = "controlplane"
 
 
+def _clean_text(value) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _access_log_error(access_log: str):
+    if access_log and not access_log.startswith("/"):
+        return jsonify(error="访问日志必须是绝对路径"), 400
+    return None
+
+
 def _current_site():
     """Resolve site from ?site_id= or X-Site-Id, else first enabled site."""
     site_id = request.args.get("site_id") or request.headers.get("X-Site-Id")
@@ -49,6 +61,11 @@ def create_site():
 
     if not site_id or not project_dir:
         return jsonify(error="site_id 与 project_dir 必填"), 400
+    access_log = _clean_text(data.get("access_log")) if "access_log" in data else ""
+    site_hosts = _clean_text(data.get("site_hosts")) if "site_hosts" in data else ""
+    rejected = _access_log_error(access_log)
+    if rejected:
+        return rejected
     if site_id == CONTROLPLANE_ID:
         return jsonify(error="请使用 manage_sites.sh ensure-self 启用自保"), 403
     if Site.query.filter_by(site_id=site_id).first():
@@ -65,6 +82,8 @@ def create_site():
         alert_email=data.get("alert_email"),
         wechat_webhook=data.get("wechat_webhook"),
         dingtalk_webhook=data.get("dingtalk_webhook"),
+        access_log=access_log or None,
+        site_hosts=site_hosts or None,
         enabled=bool(data.get("enabled", True)),
     )
     db.session.add(site)
@@ -108,6 +127,11 @@ def update_site(site_id):
     if not site:
         return jsonify(error="站点不存在"), 404
     data = request.get_json(silent=True) or {}
+    access_log = _clean_text(data.get("access_log")) if "access_log" in data else None
+    if access_log is not None:
+        rejected = _access_log_error(access_log)
+        if rejected:
+            return rejected
     for field in (
         "name",
         "project_dir",
@@ -122,6 +146,10 @@ def update_site(site_id):
         site.lock_critical_files = bool(data["lock_critical_files"])
     if "enabled" in data:
         site.enabled = bool(data["enabled"])
+    if access_log is not None:
+        site.access_log = access_log or None
+    if "site_hosts" in data:
+        site.site_hosts = _clean_text(data.get("site_hosts")) or None
     if any(k in data for k in ("alert_email", "wechat_webhook", "dingtalk_webhook")):
         values = get_global_alert_values()
         site.alert_email = values["alert_email"]
