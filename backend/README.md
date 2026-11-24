@@ -28,6 +28,25 @@ python run.py
 - `WEBSHELL_INSTALL_DIR=/opt/webshell_monitor`
 - API 需能写 `/etc/webshell-monitor/sites` 并调用 `systemctl`
 
+```bash
+sudo systemctl restart webshell-api #重启api
+cd scripts && sudo ./manage_sites.sh install #引擎更新
+sudo /opt/webshell_monitor/manage_sites.sh ensure-self #启动自保
+sudo systemctl restart 'webshell-monitor@*'
+# 确认自保状态
+sudo systemctl status webshell-monitor@controlplane
+sudo /opt/webshell_monitor/webshell_monitor.sh --site controlplane --lock-status
+
+#发版前解锁
+sudo /opt/webshell_monitor/manage_sites.sh unlock-self
+
+#发版后加锁
+sudo /opt/webshell_monitor/manage_sites.sh lock-self
+
+#关闭锁
+sudo /opt/webshell_monitor/manage_sites.sh disable-self
+```
+
 ## 主要 API
 
 | 方法 | 路径 | 说明 |
