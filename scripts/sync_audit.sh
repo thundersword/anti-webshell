@@ -21,7 +21,7 @@ exclude_rels() {
     printf '%s\n' "$rel"
     seen="$seen $rel "
   done
-  printf '%s' "$exclude" | tr '|' '\n' | sed -E 's/\\//g; s/^\(?//; s/\)?$//; s/^\/+//; s/\/+$//' | while IFS= read -r token; do
+  printf '%s' "$exclude" | tr '|' '\n' | sed -E 's/\\//g; s/^\(?//; s/\)?$//; s/^\/+//; s/\/+$//' | while IFS= read -r token || [ -n "$token" ]; do
     [ -n "$token" ] || continue
     case "$token" in
       *'*'|*'?'*|*'^'*|*'('*|*')'*) continue ;;

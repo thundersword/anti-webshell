@@ -8,7 +8,7 @@ mkdir -p "$TMP/sites" "$TMP/www/blog" "$TMP/www/shop/uploads" "$TMP/www/shop/run
 cat > "$TMP/sites/blog.conf" << EOF
 SITE_ID="blog"
 PROJECT_DIR="$TMP/www/blog"
-INOTIFY_EXCLUDE='(\\.git|/vendor/|/runtime/)'
+INOTIFY_EXCLUDE='(\\.git|/vendor/|/runtime/|/wp-content/upgrade/)'
 EOF
 cat > "$TMP/sites/shop.conf" << EOF
 SITE_ID="shop"
@@ -35,6 +35,7 @@ printf '%s\n' "$RULES" | grep -q "$TMP/www/shop/uploads" && { echo "FAIL: whitel
 printf '%s\n' "$RULES" | grep -q -- '-F dir='"$TMP/www/shop/runtime"
 printf '%s\n' "$RULES" | grep -q -- '-F dir='"$TMP/www/shop/.git"
 printf '%s\n' "$RULES" | grep -Fq -- '-F dir='"$TMP/www/shop/git" && { echo "FAIL: spurious git exclude (want .git)"; exit 1; }
+printf '%s\n' "$RULES" | grep -q -- '-F dir='"$TMP/www/blog/wp-content/upgrade"
 printf '%s\n' "$RULES" | grep -q -- '-F dir='"$TMP/www/blog"
 printf '%s\n' "$RULES" | grep -q -- '-F dir='"$TMP/extra"
 printf '%s\n' "$RULES" | grep -q 'arch=b64'
