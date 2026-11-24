@@ -30,6 +30,8 @@ PROFILE="thinkphp"
 ALERT_EMAIL=""
 WECHAT_WEBHOOK=""
 DINGTALK_WEBHOOK=""
+ACCESS_LOG=""
+SITE_HOSTS=""
 AUTO_RESTORE="true"
 LOCK_CRITICAL_FILES="true"
 USE_PROFILE_DEFAULTS=1
@@ -45,6 +47,8 @@ Options:
   --alert-email EMAIL
   --wechat-webhook URL
   --dingtalk-webhook URL
+  --access-log PATH
+  --site-hosts HOSTS
   --auto-restore true|false
   --lock-critical true|false
   --output-dir DIR
@@ -67,6 +71,15 @@ while [[ $# -gt 0 ]]; do
         --alert-email) ALERT_EMAIL="$2"; shift 2 ;;
         --wechat-webhook) WECHAT_WEBHOOK="$2"; shift 2 ;;
         --dingtalk-webhook) DINGTALK_WEBHOOK="$2"; shift 2 ;;
+        --access-log)
+            ACCESS_LOG="$2"
+            if [ -n "$ACCESS_LOG" ] && [[ "$ACCESS_LOG" != /* ]]; then
+                echo "错误: ACCESS_LOG 必须是绝对路径" >&2
+                exit 1
+            fi
+            shift 2
+            ;;
+        --site-hosts) SITE_HOSTS="$2"; shift 2 ;;
         --auto-restore) AUTO_RESTORE="$2"; shift 2 ;;
         --lock-critical) LOCK_CRITICAL_FILES="$2"; shift 2 ;;
         --output-dir) OUTPUT_DIR="$2"; shift 2 ;;
@@ -165,6 +178,8 @@ LOCK_CRITICAL_FILES="$LOCK_CRITICAL_FILES"
 ALERT_EMAIL="$ALERT_EMAIL"
 WECHAT_WEBHOOK="$WECHAT_WEBHOOK"
 DINGTALK_WEBHOOK="$DINGTALK_WEBHOOK"
+ACCESS_LOG="$ACCESS_LOG"
+SITE_HOSTS="$SITE_HOSTS"
 DANGEROUS_EXTENSIONS="${DANGEROUS_EXTENSIONS}"
 INOTIFY_EXCLUDE="${INOTIFY_EXCLUDE}"
 CRITICAL_FILES_FILE="$CRITICAL_FILE"

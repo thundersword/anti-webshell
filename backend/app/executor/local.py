@@ -113,6 +113,10 @@ class LocalSystemdExecutor(Executor):
             args += ["--wechat-webhook", cfg.wechat_webhook]
         if cfg.dingtalk_webhook:
             args += ["--dingtalk-webhook", cfg.dingtalk_webhook]
+        if cfg.access_log:
+            args += ["--access-log", cfg.access_log]
+        if cfg.site_hosts:
+            args += ["--site-hosts", cfg.site_hosts]
         for path in cfg.critical_files:
             args += ["--critical-file", path]
         for path in cfg.whitelist_dirs:
@@ -176,6 +180,8 @@ class LocalSystemdExecutor(Executor):
                     f'ALERT_EMAIL="{cfg.alert_email or ""}"',
                     f'WECHAT_WEBHOOK="{cfg.wechat_webhook or ""}"',
                     f'DINGTALK_WEBHOOK="{cfg.dingtalk_webhook or ""}"',
+                    f'ACCESS_LOG="{cfg.access_log or ""}"',
+                    f'SITE_HOSTS="{cfg.site_hosts or ""}"',
                     f'CRITICAL_FILES_FILE="{critical}"',
                     f'WHITELIST_DIRS_FILE="{whitelist}"',
                     "",

@@ -21,6 +21,8 @@ class SiteRuntimeConfig:
     alert_email: str = ""
     wechat_webhook: str = ""
     dingtalk_webhook: str = ""
+    access_log: str = ""
+    site_hosts: str = ""
     critical_files: List[str] = field(default_factory=list)
     whitelist_dirs: List[str] = field(default_factory=list)
 
