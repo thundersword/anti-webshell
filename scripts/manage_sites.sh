@@ -74,8 +74,11 @@ cmd_install() {
     cp "$SCRIPT_HOME/render_controlplane.sh" "$INSTALL_DIR/"
     cp "$SCRIPT_HOME/manage_sites.sh" "$INSTALL_DIR/"
     cp "$SCRIPT_HOME/sync_audit.sh" "$INSTALL_DIR/"
+    cp "$SCRIPT_HOME/webshell_investigate.sh" "$INSTALL_DIR/"
+    cp "$SCRIPT_HOME/webshell_investigate.py" "$INSTALL_DIR/"
     chmod +x "$INSTALL_DIR"/*.sh
     chmod +x "$INSTALL_DIR/sync_audit.sh"
+    chmod +x "$INSTALL_DIR/webshell_investigate.sh"
 
     mkdir -p "$INSTALL_DIR/profiles" "$INSTALL_DIR/rules"
     cp -a "$SCRIPT_HOME/profiles/." "$INSTALL_DIR/profiles/"

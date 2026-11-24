@@ -24,6 +24,8 @@ WECHAT_WEBHOOK=""
 DINGTALK_WEBHOOK=""
 AUTO_RESTORE="true"
 LOCK_CRITICAL_FILES="false"
+ACCESS_LOG=""
+SITE_HOSTS=""
 DANGEROUS_EXTENSIONS="php|php3|php4|php5|phtml|pht|phps|sh|py|pl|cgi|asp|aspx|jsp|html|htm|shtml"
 INOTIFY_EXCLUDE='(\.git|\.svn|\.hg|node_modules|/vendor/|/runtime/)'
 CRITICAL_FILES_FILE=""
@@ -40,6 +42,8 @@ INOTIFY_PIDS=()
 INOTIFY_FIFO=""
 PRINT_WATCH_DIRS=0
 SELF_TEST_CREATE_ALERT=0
+SELF_TEST_INVESTIGATE=0
+SEND_ALERT_FILE=""
 # Relaxed logging: skip hard failures when appending to LOG_FILE (debug CLI only).
 LOG_RELAXED=0
 
@@ -248,6 +252,28 @@ send_alert() {
     send_dingtalk_alert "$message"
 }
 
+# Second alert from an investigation body. Does not enter the monitor loop.
+send_alert_from_file() {
+    local path=$1
+    local first="" subject body
+    if [ ! -f "$path" ]; then
+        log_message "CRITICAL" "入侵分析告警文件不存在: $path"
+        return 1
+    fi
+    IFS= read -r first < "$path" || true
+    body=$(cat "$path" || true)
+    log_message "CRITICAL" "$first"
+    case "$first" in
+        入侵路径*)
+            subject="入侵路径 [$SITE_ID]"
+            ;;
+        *)
+            subject="未能生成入侵时间线 [$SITE_ID]"
+            ;;
+    esac
+    send_alert "$subject" "$body"
+}
+
 #######################################
 # Detection helpers
 #######################################
@@ -357,6 +383,175 @@ mark_create_alert_sent() {
     date +%s >"$stamp" 2>/dev/null || true
 }
 
+# UTC stamp plus 8 hex chars of the original path. sha256sum, else shasum -a 256.
+incident_id_for() {
+    local file=$1
+    local stamp digest
+    stamp=$(date -u +%Y%m%dT%H%M%SZ)
+    digest=$(printf '%s' "$file" | sha256sum 2>/dev/null | awk '{print $1}' || true)
+    if [ -z "$digest" ]; then
+        digest=$(printf '%s' "$file" | shasum -a 256 2>/dev/null | awk '{print $1}' || true)
+    fi
+    printf '%s_%s\n' "$stamp" "${digest:0:8}"
+}
+
+# Mirror webshell_investigate.py _parse_conf: trim, then strip matching quote chars.
+unquote_conf_value() {
+    local value=$1
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
+    while [ -n "$value" ]; do
+        case "$value" in
+            \'*) value=${value#\'} ;;
+            \"*) value=${value#\"} ;;
+            *) break ;;
+        esac
+    done
+    while [ -n "$value" ]; do
+        case "$value" in
+            *\') value=${value%\'} ;;
+            *\") value=${value%\"} ;;
+            *) break ;;
+        esac
+    done
+    printf '%s' "$value"
+}
+
+load_investigate_settings() {
+    local conf="${WEBSHELL_INVESTIGATE_CONF:-/etc/webshell-monitor/investigate.conf}"
+    local line key value
+    DEFAULT_ACCESS_LOG_RESOLVED=""
+    AUTH_LOG_RESOLVED="/var/log/auth.log"
+    AUDIT_LOG_RESOLVED="/var/log/audit/audit.log"
+    if [ ! -f "$conf" ]; then
+        return 0
+    fi
+    while IFS= read -r line || [ -n "$line" ]; do
+        line="${line#"${line%%[![:space:]]*}"}"
+        case "$line" in
+            ''|\#*) continue ;;
+        esac
+        case "$line" in
+            *=*) ;;
+            *) continue ;;
+        esac
+        key="${line%%=*}"
+        key="${key%"${key##*[![:space:]]}"}"
+        value=$(unquote_conf_value "${line#*=}")
+        case "$key" in
+            DEFAULT_ACCESS_LOG) DEFAULT_ACCESS_LOG_RESOLVED=$value ;;
+            AUTH_LOG) AUTH_LOG_RESOLVED=$value ;;
+            AUDIT_LOG) AUDIT_LOG_RESOLVED=$value ;;
+        esac
+    done < "$conf"
+    AUTH_LOG_RESOLVED="${AUTH_LOG_RESOLVED:-/var/log/auth.log}"
+    AUDIT_LOG_RESOLVED="${AUDIT_LOG_RESOLVED:-/var/log/audit/audit.log}"
+}
+
+record_investigate_command() {
+    local line=$1
+    local dest="${WEBSHELL_INVESTIGATE_COMMAND_LOG:-}"
+    if [ -z "$dest" ]; then
+        return 0
+    fi
+    mkdir -p "$(dirname "$dest")" 2>/dev/null || true
+    printf '%s\n' "$line" >> "$dest" 2>/dev/null || true
+}
+
+# Write the anchor, then start analysis without waiting.
+# Args: file quarantine_path reason [incident_id] [event_time]
+launch_investigation() {
+    local file=$1
+    local quarantine_path=$2
+    local reason=${3:-}
+    local incident_id=${4:-}
+    local event_time=${5:-}
+    local root dir anchor_path resolved_access access_is_global
+    local DEFAULT_ACCESS_LOG_RESOLVED="" AUTH_LOG_RESOLVED="" AUDIT_LOG_RESOLVED=""
+
+    if [ -z "$incident_id" ]; then
+        incident_id=$(incident_id_for "$file")
+    fi
+    if [ -z "$event_time" ]; then
+        event_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    fi
+
+    load_investigate_settings
+    if [ -n "${ACCESS_LOG:-}" ]; then
+        resolved_access="$ACCESS_LOG"
+        access_is_global=false
+    else
+        resolved_access="$DEFAULT_ACCESS_LOG_RESOLVED"
+        access_is_global=true
+    fi
+
+    root="${WEBSHELL_INCIDENTS_DIR:-/var/lib/webshell/incidents}"
+    dir="$root/${SITE_ID}"
+    anchor_path="$dir/${incident_id}.anchor.json"
+    if ! mkdir -p "$dir" 2>/dev/null; then
+        log_message "ERROR" "无法创建事件目录: $dir"
+        return 0
+    fi
+
+    if ! INCIDENT_ID="$incident_id" \
+        ANCHOR_SITE_ID="$SITE_ID" \
+        FILE_PATH="$file" \
+        QUARANTINE_PATH="$quarantine_path" \
+        REASON="$reason" \
+        EVENT_TIME="$event_time" \
+        ANCHOR_PROJECT_DIR="${PROJECT_DIR:-}" \
+        ACCESS_LOG_RESOLVED="$resolved_access" \
+        ANCHOR_SITE_HOSTS="${SITE_HOSTS:-}" \
+        ACCESS_IS_GLOBAL="$access_is_global" \
+        AUTH_LOG_RESOLVED="$AUTH_LOG_RESOLVED" \
+        AUDIT_LOG_RESOLVED="$AUDIT_LOG_RESOLVED" \
+        ANCHOR_PATH="$anchor_path" \
+        python3 - << 'PY'
+import json
+import os
+from pathlib import Path
+
+raw_hosts = os.environ.get("ANCHOR_SITE_HOSTS", "")
+hosts = raw_hosts.split() if raw_hosts else []
+payload = {
+    "incident_id": os.environ.get("INCIDENT_ID", ""),
+    "site_id": os.environ.get("ANCHOR_SITE_ID", ""),
+    "file_path": os.environ.get("FILE_PATH", ""),
+    "quarantine_path": os.environ.get("QUARANTINE_PATH", ""),
+    "reason": os.environ.get("REASON", ""),
+    "event_time": os.environ.get("EVENT_TIME", ""),
+    "project_dir": os.environ.get("ANCHOR_PROJECT_DIR", ""),
+    "access_log": os.environ.get("ACCESS_LOG_RESOLVED", ""),
+    "site_hosts": hosts,
+    "access_is_global": os.environ.get("ACCESS_IS_GLOBAL", "") == "true",
+    "auth_log": os.environ.get("AUTH_LOG_RESOLVED", ""),
+    "audit_log": os.environ.get("AUDIT_LOG_RESOLVED", ""),
+}
+Path(os.environ["ANCHOR_PATH"]).write_text(
+    json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+    encoding="utf-8",
+)
+PY
+    then
+        log_message "ERROR" "无法写入入侵锚点: $anchor_path"
+        return 0
+    fi
+
+    if [ "${WEBSHELL_INVESTIGATE_DRY_RUN:-}" = "1" ]; then
+        record_investigate_command "dry-run ${SCRIPT_HOME}/webshell_investigate.sh --site ${SITE_ID} --anchor ${anchor_path}"
+        log_message "INFO" "入侵分析 dry-run incident=$incident_id"
+        return 0
+    fi
+
+    record_investigate_command "systemd-run --scope --collect --unit=webshell-investigate-${SITE_ID}-${incident_id} --property=RuntimeMaxSec=20 ${SCRIPT_HOME}/webshell_investigate.sh --site ${SITE_ID} --anchor ${anchor_path}"
+    log_message "INFO" "已启动入侵分析 incident=$incident_id"
+    systemd-run --scope --collect \
+        --unit="webshell-investigate-${SITE_ID}-${incident_id}" \
+        --property=RuntimeMaxSec=20 \
+        "$SCRIPT_HOME/webshell_investigate.sh" --site "$SITE_ID" --anchor "$anchor_path" &
+    return 0
+}
+
 quarantine_file() {
     local file=$1
     local reason=$2
@@ -366,7 +561,7 @@ quarantine_file() {
         return 1
     fi
 
-    local timestamp basename_q quarantine_path
+    local timestamp basename_q quarantine_path incident_id event_time
     timestamp=$(date +%Y%m%d_%H%M%S)
     basename_q=$(basename "$file")
     local key
@@ -375,8 +570,11 @@ quarantine_file() {
 
     if cp -p "$file" "$quarantine_path" 2>/dev/null; then
         rm -f "$file"
-        log_message "CRITICAL" "文件已隔离: $file -> $quarantine_path"
+        incident_id=$(incident_id_for "$file")
+        event_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+        log_message "CRITICAL" "文件已隔离: $file -> $quarantine_path incident=$incident_id"
         log_message "CRITICAL" "隔离原因: $reason"
+        launch_investigation "$file" "$quarantine_path" "$reason" "$incident_id" "$event_time" || true
 
         if [ "$alert_mode" != "no_alert" ]; then
             local alert_msg
@@ -793,6 +991,165 @@ run_self_test_create_alert() {
     return 0
 }
 
+anchor_for() {
+    python3 - "$1" "$2" << 'PY'
+import json
+import os
+import sys
+
+root, want = sys.argv[1], sys.argv[2]
+found = ""
+for dirpath, _dirnames, names in os.walk(root):
+    for name in names:
+        if not name.endswith(".anchor.json"):
+            continue
+        path = os.path.join(dirpath, name)
+        with open(path, encoding="utf-8") as handle:
+            data = json.load(handle)
+        if data.get("file_path") == want:
+            found = path
+            break
+    if found:
+        break
+if not found:
+    sys.stderr.write("FAIL: anchor missing for %s\n" % want)
+    sys.exit(1)
+sys.stdout.write(found)
+PY
+}
+
+check_anchor() {
+    python3 - "$@" << 'PY'
+import json
+import re
+import sys
+
+path = sys.argv[1]
+expect = {
+    "file_path": sys.argv[2],
+    "access_log": sys.argv[3],
+    "site_id": sys.argv[4],
+    "access_is_global": sys.argv[5] == "true",
+    "site_hosts": sys.argv[6].split() if sys.argv[6] else [],
+}
+if len(sys.argv) > 7 and sys.argv[7]:
+    expect["auth_log"] = sys.argv[7]
+if len(sys.argv) > 8 and sys.argv[8]:
+    expect["audit_log"] = sys.argv[8]
+with open(path, encoding="utf-8") as handle:
+    data = json.load(handle)
+errors = []
+for key in ("incident_id", "file_path", "access_log", "site_id"):
+    if not data.get(key):
+        errors.append("missing %s" % key)
+for key, want in expect.items():
+    if data.get(key) != want:
+        errors.append("%s got %r want %r" % (key, data.get(key), want))
+incident = data.get("incident_id") or ""
+if not re.match(r"^[0-9]{8}T[0-9]{6}Z_[0-9a-f]{8}$", incident):
+    errors.append("incident_id %r" % incident)
+event = data.get("event_time") or ""
+if not re.match(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$", event):
+    errors.append("event_time %r" % event)
+if errors:
+    sys.stderr.write("FAIL: " + "; ".join(errors) + "\n")
+    sys.exit(1)
+PY
+}
+
+run_self_test_investigate() {
+    local tmp site_dir access_log conf_root incidents command_log
+    local original quarantined anchor fallback_file fallback_anchor default_access
+    tmp=$(mktemp -d)
+    site_dir="$tmp/site"
+    access_log="$tmp/access.log"
+    incidents="$tmp/incidents"
+    command_log="$tmp/commands.log"
+    conf_root="$tmp/sites"
+    mkdir -p "$site_dir/public" "$tmp/quarantine" "$tmp/backup" "$incidents" "$conf_root"
+    printf 'ok\n' > "$access_log"
+    : > "$command_log"
+    LOG_FILE="$tmp/monitor.log"
+    LOG_RELAXED=1
+    : > "$LOG_FILE"
+
+    cat > "$conf_root/blog.conf" << EOF
+PROJECT_DIR="$site_dir"
+ACCESS_LOG="$access_log"
+SITE_HOSTS="blog.example www.blog.example"
+LOG_FILE="$LOG_FILE"
+QUARANTINE_DIR="$tmp/quarantine"
+BACKUP_DIR="$tmp/backup"
+EOF
+    CONFIG_ROOT="$conf_root"
+    load_site_config blog
+
+    WEBSHELL_INVESTIGATE_DRY_RUN=1
+    WEBSHELL_INCIDENTS_DIR="$incidents"
+    WEBSHELL_INVESTIGATE_COMMAND_LOG="$command_log"
+    systemd-run() {
+        printf 'systemd-run %s\n' "$*" >> "$WEBSHELL_INVESTIGATE_COMMAND_LOG"
+        return 0
+    }
+
+    original="$site_dir/public/x.php"
+    quarantined="$tmp/quarantine/x.php"
+    printf '<?php echo 1;\n' > "$quarantined"
+    launch_investigation "$original" "$quarantined" "包含Webshell特征代码"
+
+    anchor=$(anchor_for "$incidents" "$original") || {
+        rm -rf "$tmp"
+        return 1
+    }
+    case "$anchor" in
+        "$incidents/$SITE_ID/"*.anchor.json) ;;
+        *)
+            echo "FAIL: anchor path $anchor" >&2
+            rm -rf "$tmp"
+            return 1
+            ;;
+    esac
+    if ! check_anchor "$anchor" "$original" "$access_log" "$SITE_ID" "false" "blog.example www.blog.example" "" ""; then
+        rm -rf "$tmp"
+        return 1
+    fi
+
+    ACCESS_LOG=""
+    WEBSHELL_INVESTIGATE_CONF="$tmp/investigate.conf"
+    default_access="$tmp/default-access.log"
+    printf 'default\n' > "$default_access"
+    cat > "$WEBSHELL_INVESTIGATE_CONF" << EOF
+DEFAULT_ACCESS_LOG="$default_access"
+AUTH_LOG="$tmp/auth.log"
+AUDIT_LOG="$tmp/audit.log"
+EOF
+    fallback_file="$site_dir/public/y.php"
+    launch_investigation "$fallback_file" "$tmp/quarantine/y.php" "fallback"
+    fallback_anchor=$(anchor_for "$incidents" "$fallback_file") || {
+        rm -rf "$tmp"
+        return 1
+    }
+    if ! check_anchor "$fallback_anchor" "$fallback_file" "$default_access" "$SITE_ID" "true" "blog.example www.blog.example" "$tmp/auth.log" "$tmp/audit.log"; then
+        rm -rf "$tmp"
+        return 1
+    fi
+
+    if ! grep -q 'dry-run' "$command_log"; then
+        echo "FAIL: command log missing dry-run record" >&2
+        rm -rf "$tmp"
+        return 1
+    fi
+    if grep -q 'systemd-run' "$command_log"; then
+        echo "FAIL: command log contains systemd-run" >&2
+        rm -rf "$tmp"
+        return 1
+    fi
+
+    rm -rf "$tmp"
+    echo "OK"
+    return 0
+}
+
 require_site_arg() {
     if [ -z "${SITE_ID:-}" ]; then
         echo "错误: 请指定 --site <site_id>" >&2
@@ -813,6 +1170,7 @@ Webshell监控脚本（多站点）
   $0 --site <id> --lock          对关键文件 chattr +i（阻止修改）
   $0 --site <id> --unlock        解除关键文件不可变属性（发版前）
   $0 --site <id> --lock-status   查看关键文件锁定状态
+  $0 --site <id> --send-alert-file <文件>  发送入侵时间线告警后退出
   $0 --help                      显示帮助信息
 
 调试（无需 --site）:
@@ -820,6 +1178,7 @@ Webshell监控脚本（多站点）
   $0 --watch-file <列表文件>     覆盖 WATCH_DIRS_FILE（与 --print-watch-dirs 联用）
   $0 --project-dir <目录>        覆盖 PROJECT_DIR（与 --print-watch-dirs 联用）
   $0 --self-test-create-alert    新建文件告警逻辑自检（供 scripts/tests 使用）
+  $0 --self-test-investigate     隔离后入侵分析启动自检（供 scripts/tests 使用）
 
 配置目录: $CONFIG_ROOT/<site_id>.conf
 systemd:  systemctl start webshell-monitor@<site_id>
@@ -834,6 +1193,10 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --site)
             SITE_ID="$2"
+            shift 2
+            ;;
+        --send-alert-file)
+            SEND_ALERT_FILE="$2"
             shift 2
             ;;
         --report)
@@ -881,6 +1244,10 @@ while [[ $# -gt 0 ]]; do
             SELF_TEST_CREATE_ALERT=1
             shift
             ;;
+        --self-test-investigate)
+            SELF_TEST_INVESTIGATE=1
+            shift
+            ;;
         --help|-h)
             print_help
             exit 0
@@ -915,8 +1282,19 @@ if [ "${SELF_TEST_CREATE_ALERT:-0}" = "1" ]; then
     exit $?
 fi
 
+if [ "${SELF_TEST_INVESTIGATE:-0}" = "1" ]; then
+    set +e
+    run_self_test_investigate
+    exit $?
+fi
+
 require_site_arg
 load_site_config "$SITE_ID"
+
+if [ -n "${SEND_ALERT_FILE:-}" ]; then
+    send_alert_from_file "$SEND_ALERT_FILE" || exit $?
+    exit 0
+fi
 
 case "$ACTION" in
     report)
