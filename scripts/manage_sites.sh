@@ -219,7 +219,10 @@ cmd_remove_site() {
 
 cmd_sync_audit() {
     require_root
-    CONFIG_ROOT="$CONFIG_ROOT" "$INSTALL_DIR/sync_audit.sh" || print_warning "审计规则未加载"
+    CONFIG_ROOT="$CONFIG_ROOT" "$INSTALL_DIR/sync_audit.sh" || {
+        print_warning "审计规则未加载"
+        exit 1
+    }
 }
 
 cmd_ensure_self() {
