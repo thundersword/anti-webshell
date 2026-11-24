@@ -12,7 +12,13 @@
         </div>
       </template>
       
-      <el-table :data="events" style="width: 100%" v-loading="loading">
+      <el-table
+        :data="events"
+        style="width: 100%"
+        v-loading="loading"
+        :row-class-name="rowClassName"
+        @row-click="openTimeline"
+      >
         <el-table-column type="index" label="#" width="60" />
         <el-table-column prop="event_type" label="事件类型" width="150" />
         <el-table-column prop="file_path" label="文件路径" show-overflow-tooltip />
@@ -39,11 +45,54 @@
         />
       </div>
     </el-card>
+
+    <el-drawer v-model="drawerVisible" title="入侵时间线" size="520px">
+      <div v-loading="timelineLoading">
+        <template v-if="timelineState === 'ok'">
+          <el-descriptions :column="1" border>
+            <el-descriptions-item label="入口">{{ timeline.entry }}</el-descriptions-item>
+            <el-descriptions-item label="置信度">{{ confidenceText }}</el-descriptions-item>
+            <el-descriptions-item label="来源 IP">{{ displayValue(actor.ip) }}</el-descriptions-item>
+            <el-descriptions-item label="URL">{{ actorUrl }}</el-descriptions-item>
+            <el-descriptions-item label="exe">{{ displayValue(actor.exe) }}</el-descriptions-item>
+            <el-descriptions-item label="用户">{{ displayValue(actor.uid) }}</el-descriptions-item>
+          </el-descriptions>
+          <h4>缺口</h4>
+          <ul v-if="gaps.length" class="gap-list">
+            <li v-for="(gap, index) in gaps" :key="index">{{ gap }}</li>
+          </ul>
+          <p v-else>无</p>
+          <h4>事件</h4>
+          <ol class="event-list">
+            <li v-for="(item, index) in timelineEvents" :key="index">
+              <span class="event-meta">{{ item.ts }} · {{ item.source }} · {{ item.kind }}</span>
+              <div>{{ item.summary }}</div>
+            </li>
+          </ol>
+        </template>
+        <template v-else-if="timelineState === 'failed'">
+          <p>{{ timeline.summary }}</p>
+          <h4>缺口</h4>
+          <ul v-if="gaps.length" class="gap-list">
+            <li v-for="(gap, index) in gaps" :key="index">{{ gap }}</li>
+          </ul>
+          <p v-else>无</p>
+        </template>
+        <template v-else-if="timelineState === 'pending'">
+          <p>分析中</p>
+          <el-button type="primary" :loading="timelineLoading" @click="loadTimeline">刷新</el-button>
+        </template>
+        <template v-else-if="timelineState === 'missing'">
+          <p>未能生成</p>
+          <p>{{ timelineMessage }}</p>
+        </template>
+      </div>
+    </el-drawer>
   </div>
 </template>
 
 <script>
-import { ref, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import api from '../api/index.js'
 
 export default {
@@ -55,6 +104,102 @@ export default {
     const perPage = ref(20)
     const total = ref(0)
     const severityFilter = ref('')
+    const drawerVisible = ref(false)
+    const timelineLoading = ref(false)
+    const timeline = ref(null)
+    const timelineState = ref('')
+    const timelineMessage = ref('')
+    const currentEventId = ref(null)
+
+    const confidenceLabels = {
+      high: '高',
+      medium: '中',
+      low: '低'
+    }
+
+    const actor = computed(() => (timeline.value && timeline.value.actor) || {})
+    const gaps = computed(() => {
+      const list = timeline.value && timeline.value.gaps
+      return Array.isArray(list) ? list : []
+    })
+    const timelineEvents = computed(() => {
+      const list = timeline.value && timeline.value.events
+      return Array.isArray(list) ? list : []
+    })
+    const confidenceText = computed(() => {
+      const value = timeline.value && timeline.value.confidence
+      return confidenceLabels[value] || value || ''
+    })
+    const actorUrl = computed(() => {
+      const method = actor.value.method || ''
+      const url = actor.value.url || ''
+      const text = [method, url].filter(Boolean).join(' ')
+      return text || '未知'
+    })
+
+    const displayValue = (value) => value || '未知'
+
+    const applyTimeline = (data) => {
+      const body = data && typeof data === 'object' ? data : {}
+      timeline.value = body
+      timelineMessage.value = body.message || ''
+      if (body.status === 'pending') {
+        timelineState.value = 'pending'
+      } else if (body.status === 'failed') {
+        timelineState.value = 'failed'
+      } else if (body.status === 'missing') {
+        timelineState.value = 'missing'
+      } else if (body.status === 'ok') {
+        timelineState.value = 'ok'
+      } else if (body.summary) {
+        timelineState.value = 'failed'
+      } else {
+        timelineState.value = 'missing'
+        timelineMessage.value = body.message || ''
+      }
+    }
+
+    const loadTimeline = async () => {
+      const eventId = currentEventId.value
+      if (eventId == null || eventId === '') return
+      timelineLoading.value = true
+      try {
+        const data = await api.get('/events/' + eventId + '/timeline', { skipErrorToast: true })
+        if (currentEventId.value !== eventId) return
+        applyTimeline(data)
+      } catch (error) {
+        if (currentEventId.value !== eventId) return
+        const status = error.response && error.response.status
+        const data = (error.response && error.response.data) || {}
+        timeline.value = null
+        if (status === 404) {
+          timelineState.value = 'missing'
+          timelineMessage.value = data.message || ''
+        } else if (status === 202 || data.status === 'pending') {
+          timelineState.value = 'pending'
+          timeline.value = data
+        } else {
+          timelineState.value = 'missing'
+          timelineMessage.value = data.message || data.error || '请求失败'
+        }
+      } finally {
+        if (currentEventId.value === eventId) {
+          timelineLoading.value = false
+        }
+      }
+    }
+
+    const openTimeline = (row) => {
+      if (!row || !row.incident_id) return
+      currentEventId.value = row.id
+      timeline.value = null
+      timelineState.value = ''
+      timelineMessage.value = ''
+      drawerVisible.value = true
+      loadTimeline()
+    }
+
+    const rowClassName = ({ row }) => (row && row.incident_id ? 'is-timeline' : '')
     
     const loadEvents = async () => {
       loading.value = true
@@ -115,7 +260,21 @@ export default {
       severityFilter,
       handleSizeChange,
       handlePageChange,
-      getSeverityType
+      getSeverityType,
+      drawerVisible,
+      timelineLoading,
+      timeline,
+      timelineState,
+      timelineMessage,
+      actor,
+      gaps,
+      timelineEvents,
+      confidenceText,
+      actorUrl,
+      displayValue,
+      openTimeline,
+      loadTimeline,
+      rowClassName
     }
   }
 }
@@ -132,6 +291,25 @@ export default {
   margin-top: 20px;
   display: flex;
   justify-content: flex-end;
+}
+
+.events :deep(.el-table__row.is-timeline) {
+  cursor: pointer;
+}
+
+.gap-list,
+.event-list {
+  margin: 0 0 12px;
+  padding-left: 18px;
+}
+
+.event-meta {
+  color: #909399;
+  font-size: 12px;
+}
+
+h4 {
+  margin: 16px 0 8px;
 }
 </style>
 

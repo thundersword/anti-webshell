@@ -31,6 +31,18 @@
         </el-tag>
       </div>
     </el-card>
+
+    <el-card class="service-card">
+      <template #header>
+        <span>审计</span>
+      </template>
+      <div class="audit-body">
+        <p>auditd：{{ auditdText }}</p>
+        <p>{{ rulesText }}</p>
+        <p class="audit-hint">手工排除、临时停用某个目录时，只编辑 audit.local.rules，然后重新执行 sync-audit。</p>
+        <pre class="audit-commands">{{ auditCommands }}</pre>
+      </div>
+    </el-card>
   </div>
 </template>
 
@@ -50,6 +62,12 @@ export default {
     const siteId = computed(() => route.params.siteId || siteStore.currentSiteId)
     const serviceStatus = ref('stopped')
     const loading = ref(false)
+    const audit = ref({
+      auditd: 'unknown',
+      rules_loaded: false,
+      sync_command: '',
+      check_command: ''
+    })
 
     const statusType = computed(() => {
       if (serviceStatus.value === 'running') return 'success'
@@ -63,12 +81,41 @@ export default {
       return '错误'
     })
 
+    const auditdText = computed(() => {
+      const value = String(audit.value.auditd || '').toLowerCase()
+      if (value === 'active') return '运行中'
+      if (value === 'inactive') return '未运行'
+      return '未知'
+    })
+
+    const rulesText = computed(() => (
+      audit.value.rules_loaded ? '本站规则已加载' : '本站规则未加载'
+    ))
+
+    const auditCommands = computed(() => (
+      [audit.value.sync_command, audit.value.check_command].join('\n')
+    ))
+
     const loadServiceStatus = async () => {
       try {
         const data = await api.get('/service/status')
         serviceStatus.value = data.status
       } catch (error) {
         console.error('加载服务状态失败', error)
+      }
+    }
+
+    const loadAuditStatus = async () => {
+      try {
+        const data = await api.get('/service/audit-status', { skipErrorToast: true })
+        audit.value = {
+          auditd: data.auditd || 'unknown',
+          rules_loaded: !!data.rules_loaded,
+          sync_command: data.sync_command || '',
+          check_command: data.check_command || ''
+        }
+      } catch (error) {
+        console.error('加载审计状态失败', error)
       }
     }
 
@@ -103,6 +150,7 @@ export default {
     const refresh = () => {
       if (typeof document !== 'undefined' && document.hidden) return
       loadServiceStatus()
+      loadAuditStatus()
     }
 
     watch(siteId, (id) => {
@@ -134,7 +182,10 @@ export default {
       statusText,
       loading,
       handleStart,
-      handleStop
+      handleStop,
+      auditdText,
+      rulesText,
+      auditCommands
     }
   }
 }
@@ -154,5 +205,22 @@ export default {
 .service-status {
   text-align: center;
   padding: 20px;
+}
+
+.audit-body p {
+  margin: 0 0 8px;
+}
+
+.audit-hint {
+  color: #606266;
+}
+
+.audit-commands {
+  margin: 12px 0 0;
+  padding: 12px;
+  background: #1e1e1e;
+  color: #d4d4d4;
+  font-size: 12px;
+  white-space: pre-wrap;
 }
 </style>

@@ -64,6 +64,9 @@ api.interceptors.response.use(
   (error) => {
     if (error.response) {
       const { status, data } = error.response
+      if (status === 202) {
+        return data
+      }
       const silent = error.config?.skipErrorToast
 
       if (status === 401) {

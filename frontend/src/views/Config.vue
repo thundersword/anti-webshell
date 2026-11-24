@@ -74,6 +74,19 @@
               <el-switch v-model="protect.lock_critical_files" @change="saveProtect" />
               <span class="hint">chattr +i，Web 进程无法改写（发版前请先解锁）</span>
             </el-form-item>
+            <el-form-item label="访问日志">
+              <el-input v-model="protect.access_log" :disabled="!protectLoaded" />
+            </el-form-item>
+            <el-form-item label="Host">
+              <el-input
+                v-model="protect.site_hosts"
+                :disabled="!protectLoaded"
+                placeholder="blog.example www.blog.example"
+              />
+            </el-form-item>
+            <el-form-item>
+              <el-button type="primary" :disabled="!protectLoaded" @click="saveProtect">保存</el-button>
+            </el-form-item>
             <el-form-item label="立即操作">
               <el-button type="primary" :loading="lockBusy" @click="doLock(true)">立即锁定</el-button>
               <el-button :loading="lockBusy" @click="doLock(false)">发版解锁</el-button>
@@ -102,8 +115,11 @@ export default {
     const whitelistDirs = ref([])
     const protect = ref({
       auto_restore: true,
-      lock_critical_files: true
+      lock_critical_files: true,
+      access_log: '',
+      site_hosts: ''
     })
+    const protectLoaded = ref(false)
     const lockBusy = ref(false)
     const lockStatusText = ref('')
     
@@ -169,10 +185,16 @@ export default {
     
     const loadProtect = async () => {
       if (!currentSiteId.value) return
+      protectLoaded.value = false
+      protect.value.access_log = ''
+      protect.value.site_hosts = ''
       try {
         const data = await api.get(`/sites/${currentSiteId.value}`)
         protect.value.auto_restore = !!data.auto_restore
         protect.value.lock_critical_files = data.lock_critical_files !== false
+        protect.value.access_log = data.access_log || ''
+        protect.value.site_hosts = data.site_hosts || ''
+        protectLoaded.value = true
         const st = await api.get('/service/lock-status')
         lockStatusText.value = st.status || ''
       } catch (error) {
@@ -183,10 +205,15 @@ export default {
     const saveProtect = async () => {
       if (!currentSiteId.value) return
       try {
-        await api.put(`/sites/${currentSiteId.value}`, {
+        const payload = {
           auto_restore: protect.value.auto_restore,
           lock_critical_files: protect.value.lock_critical_files
-        })
+        }
+        if (protectLoaded.value) {
+          payload.access_log = protect.value.access_log
+          payload.site_hosts = protect.value.site_hosts
+        }
+        await api.put(`/sites/${currentSiteId.value}`, payload)
         ElMessage.success('防护策略已保存')
         loadProtect()
       } catch (error) {
@@ -229,6 +256,7 @@ export default {
       handleAddWhitelistDir,
       handleDeleteWhitelistDir,
       protect,
+      protectLoaded,
       lockBusy,
       lockStatusText,
       saveProtect,

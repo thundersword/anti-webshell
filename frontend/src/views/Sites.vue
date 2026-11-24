@@ -52,6 +52,12 @@
             </template>
           </el-input>
         </el-form-item>
+        <el-form-item label="访问日志">
+          <el-input v-model="form.access_log" />
+        </el-form-item>
+        <el-form-item label="Host">
+          <el-input v-model="form.site_hosts" placeholder="blog.example www.blog.example" />
+        </el-form-item>
         <el-form-item label="框架 Profile">
           <el-select v-model="form.profile" style="width: 100%" filterable>
             <el-option
@@ -110,6 +116,8 @@ export default {
       site_id: '',
       name: '',
       project_dir: '',
+      access_log: '',
+      site_hosts: '',
       profile: 'thinkphp5',
       lock_critical_files: true,
       start: true
@@ -144,6 +152,8 @@ export default {
         site_id: '',
         name: '',
         project_dir: '',
+        access_log: '',
+        site_hosts: '',
         profile: 'thinkphp5',
         alert_email: '',
         lock_critical_files: true,
