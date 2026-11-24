@@ -181,6 +181,45 @@ def test_syslog_local_accepted_is_ssh():
     assert timeline["actor"]["ip"] == "9.9.9.9"
 
 
+def test_syslog_year_hint_uses_local_new_year():
+    """Jan 1 local while UTC is still Dec 31 must stay inside the ssh window."""
+    zone = timezone(timedelta(hours=8))
+    local = datetime(2026, 1, 1, 0, 25, 0, tzinfo=zone)
+    hint = local.astimezone(timezone.utc)
+    line = (
+        "Jan  1 00:25:00 host sshd[1]: Accepted password for root "
+        "from 9.9.9.9 port 22 ssh2"
+    )
+    stamp = mod._parse_auth_time(line, hint, zone)
+    write_at = hint
+    assert write_at - timedelta(minutes=30) <= stamp <= write_at + timedelta(minutes=5)
+    record = {"exe": "/bin/bash", "comm": "bash", "uid": "root", "auid": "root"}
+    accepts = mod._matching_accepts(
+        [{
+            "ts": stamp,
+            "user": "root",
+            "ip": "9.9.9.9",
+            "kind": "accepted",
+            "summary": "",
+        }],
+        record,
+        write_at,
+    )
+    assert mod._entry(record, accepts, [], [], False, True) == "ssh"
+
+
+def test_two_gets_with_audit_hit_is_medium():
+    timeline = investigate(anchor(), {
+        "audit": audit_write(ts=T, exe="/usr/sbin/php-fpm", comm="php-fpm", uid="www-data", path=FILE),
+        "access": "\n".join([
+            combined(T - timedelta(seconds=5), "GET", "/a.php", "1.2.3.4", 200, "blog.example"),
+            combined(T, "GET", "/b.php", "1.2.3.4", 200, "blog.example"),
+        ]),
+        "auth": "",
+    })
+    assert timeline["confidence"] == "medium"
+
+
 def _timeline_for_access_file(directory: Path, earliest):
     directory.mkdir(parents=True, exist_ok=True)
     log_path = directory / "access.log"

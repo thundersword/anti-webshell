@@ -111,7 +111,9 @@ def investigate(anchor: dict, logs: dict) -> dict:
     accepts = _matching_accepts(auth_rows, record, write_at)
     entry = _entry(record, accepts, posts, writes, rce, bool(record) and not time_estimated)
     audit_hit = record is not None and not time_estimated
-    confidence = _confidence(entry, audit_hit, len(posts), len(accepts), records, quarantine)
+    confidence = _confidence(
+        entry, audit_hit, len(posts), len(accepts), records, quarantine, len(writes)
+    )
 
     actor = _actor(record, chosen, accepts, entry)
     events = _events(
@@ -469,7 +471,7 @@ def _parse_auth(text: str | None, gaps: list[str], year_hint: datetime) -> list[
     return rows
 
 
-def _parse_auth_time(line: str, year_hint: datetime) -> datetime | None:
+def _parse_auth_time(line: str, year_hint: datetime, zone=None) -> datetime | None:
     iso = ISO_PREFIX_RE.match(line.strip())
     if iso:
         try:
@@ -482,14 +484,21 @@ def _parse_auth_time(line: str, year_hint: datetime) -> datetime | None:
     month = MONTHS.get(syslog.group(1))
     if month is None:
         return None
-    year = year_hint.year
-    if month > year_hint.month + 1:
+    # Zoneless syslog is host-local. Take the year and month from the hint
+    # in that zone, not from the UTC calendar date.
+    if zone is None:
+        local_hint = year_hint.astimezone()
+        zone = local_hint.tzinfo
+    else:
+        local_hint = year_hint.astimezone(zone)
+    year = local_hint.year
+    if month > local_hint.month + 1:
         year -= 1
     try:
-        # Traditional syslog has no zone. The clock is the host's local time.
         parsed = datetime(
             year, month, int(syslog.group(2)),
             int(syslog.group(3)), int(syslog.group(4)), int(syslog.group(5)),
+            tzinfo=zone,
         )
         return parsed.astimezone(timezone.utc)
     except (ValueError, OverflowError, OSError):
@@ -613,7 +622,9 @@ def _entry(record, accepts, posts, writes, rce, audit_hit) -> str:
     return "unknown"
 
 
-def _confidence(entry, audit_hit, post_count, accept_count, records, quarantine) -> str:
+def _confidence(
+    entry, audit_hit, post_count, accept_count, records, quarantine, request_count,
+) -> str:
     if entry == "unknown":
         return "low"
     cron_count = 0
@@ -629,7 +640,7 @@ def _confidence(entry, audit_hit, post_count, accept_count, records, quarantine)
         return "high"
     if audit_hit and entry == "cron" and cron_count == 1:
         return "high"
-    if (audit_hit and post_count > 1) or (not audit_hit and post_count == 1):
+    if (audit_hit and request_count > 1) or (not audit_hit and post_count == 1):
         return "medium"
     return "low"
 
