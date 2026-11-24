@@ -39,4 +39,25 @@ set -e
 printf '%s\n' "$sync_out" | grep -q '审计规则未加载' \
   || { echo "FAIL: cmd_sync_audit missing audit load warning"; exit 1; }
 
+STUB_BIN="$TMP/bin"
+mkdir -p "$STUB_BIN"
+cat > "$STUB_BIN/systemctl" << 'EOF'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "is-active" ]]; then
+  exit 3
+fi
+exit 0
+EOF
+chmod +x "$STUB_BIN/systemctl"
+printf '%s\n' '#!/usr/bin/env bash' 'exit 0' > "$STUB_INSTALL/sync_audit.sh"
+
+set +e
+sync_out="$(PATH="$STUB_BIN:$PATH" cmd_sync_audit 2>&1)"
+sync_st=$?
+set -e
+
+[[ "$sync_st" -eq 1 ]] || { echo "FAIL: cmd_sync_audit inactive auditd status=$sync_st want 1"; exit 1; }
+printf '%s\n' "$sync_out" | grep -q 'auditd 未运行' \
+  || { echo "FAIL: cmd_sync_audit missing inactive auditd warning"; exit 1; }
+
 echo OK

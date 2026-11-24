@@ -223,6 +223,12 @@ cmd_sync_audit() {
         print_warning "审计规则未加载"
         exit 1
     }
+    if command -v systemctl >/dev/null 2>&1; then
+        if ! systemctl is-active --quiet auditd; then
+            print_warning "auditd 未运行"
+            exit 1
+        fi
+    fi
 }
 
 cmd_ensure_self() {
