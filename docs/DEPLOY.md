@@ -54,10 +54,28 @@ sudo ./manage_sites.sh install
 
 会完成：
 
-- 脚本 / Profile / 规则 → `/opt/webshell_monitor`
+- 脚本 / Profile / 规则 → `/opt/webshell_monitor`（含 `sync_audit.sh`）
 - systemd 模板 → `webshell-monitor@.service`
 - 配置目录 → `/etc/webshell-monitor/sites`
 - 调高 `fs.inotify.max_user_watches` 等
+- 仅当 `/etc/webshell-monitor/investigate.conf` 不存在时创建它
+- 按现有站点 conf 执行 `sync-audit`
+- 重启已有 `webshell-monitor@*`
+
+`install` 不重写已有站点 conf、关键文件列表和白名单。缺少 `ACCESS_LOG` / `SITE_HOSTS` 时视为空字符串。全局访问日志只探测 `/var/log/nginx/access.log` 与 `/var/log/apache2/access.log`；不会自动选用 `/www/wwwlogs/*.log`。全局文件为空时，在控制面为该站点填写访问日志。
+
+系统有 `apt-get` 且没有 `auditctl` 时会尝试安装 `auditd`。安装失败只告警，不中断安装。
+
+### 手工调整审计规则
+
+只编辑 `/etc/webshell-monitor/audit.local.rules`，然后：
+
+```bash
+sudo /opt/webshell_monitor/manage_sites.sh sync-audit
+sudo auditctl -l | grep webshell
+```
+
+不要手改 `/etc/audit/rules.d/webshell.rules`（下次 `sync-audit` 会覆盖）。不要在规则里写 `-e 2`。升级、建站、删站都不改 `audit.local.rules`。
 
 控制面自保 `ensure-self` **不要在这里立刻执行**：引擎要求 UI 根目录（`WEBSHELL_UI_ROOT`，默认 `/www/wwwroot/anti-webshell`）已存在。请先完成第 6 节前端部署，再按「控制面自保」小节启用。
 
@@ -280,6 +298,9 @@ sudo nginx -t && sudo systemctl reload nginx
 5. **站点同步**：GUI「站点管理」操作后，`sync_status` 应为 `synced`，对应 `webshell-monitor@*` 为 active
 6. **功能抽测**
    - 非白名单目录创建含 `eval(` 的 `.php` → 进入 `/var/quarantine/<site_id>/`
+   - 对已有站点执行升级后，`auditctl -l` 能看到 `webshell_write`
+   - 在非白名单目录放入含 `eval(` 的 `.php`：先收到「已隔离」，再收到带 IP 与进程的第二条告警（日志可用时）
+   - 事件页点开该行能看到时间线；分析失败时看到原因而不是空抽屉
    - 非白名单目录创建普通 `.txt`（无恶意特征）→ 引擎日志含「监控目录新增文件」，并触发告警
    - 修改关键文件 → 自动恢复（`AUTO_RESTORE=true`）
 
@@ -308,7 +329,7 @@ sudo /opt/webshell_monitor/manage_sites.sh unlock-self
 
 cd /opt/anti-webshell && git pull
 
-# 引擎
+# 引擎（install 会重启已有 webshell-monitor@*，且不重写站点 conf）
 cd scripts && sudo ./manage_sites.sh install
 sudo systemctl restart 'webshell-monitor@*'
 

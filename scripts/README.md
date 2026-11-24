@@ -37,8 +37,12 @@ sudo ./manage_sites.sh add-site blog /www/wwwroot/blog thinkphp
   webshell_monitor.sh
   render_site_config.sh
   manage_sites.sh
+  sync_audit.sh
   profiles/*.conf
   rules/*.rules
+
+/etc/webshell-monitor/investigate.conf
+/etc/webshell-monitor/audit.local.rules
 
 /var/log/webshell/<site_id>.log
 /var/quarantine/<site_id>/
@@ -79,6 +83,7 @@ GUI 不能删除 `controlplane` 站点；关闭自保只能用 `disable-self`。
 sudo ./manage_sites.sh list-sites
 sudo ./manage_sites.sh add-site shop /www/wwwroot/shop laravel
 sudo ./manage_sites.sh remove-site shop
+sudo ./manage_sites.sh sync-audit
 sudo ./manage_sites.sh start blog
 sudo ./manage_sites.sh stop blog
 
@@ -136,6 +141,19 @@ GUI 建站时可点「探测框架」，或 CLI 使用对应 profile 名。
 仓库 `backend/`（Flask）+ `frontend/`（Vue3）提供登录、站点管理、配置与启停。
 
 生产完整步骤见 [docs/DEPLOY.md](../docs/DEPLOY.md)。
+
+## 审计规则与升级
+
+`install` 会重启已有的 `webshell-monitor@*`，并且不重写已有站点 conf、关键文件列表和白名单。`/etc/webshell-monitor/investigate.conf` 只在文件不存在时创建。若 `/var/log/nginx/access.log` 或 `/var/log/apache2/access.log` 存在，则写入 `DEFAULT_ACCESS_LOG`。不会自动选用 `/www/wwwlogs/*.log`。全局访问日志为空时，在控制面为该站点填写访问日志。
+
+手工排除或临时停用某个目录时，只编辑 `/etc/webshell-monitor/audit.local.rules`。不要手改 `/etc/audit/rules.d/webshell.rules`。不要在规则里写 `-e 2`。改完后执行：
+
+```bash
+sudo /opt/webshell_monitor/manage_sites.sh sync-audit
+sudo auditctl -l | grep webshell
+```
+
+`add-site` 与 `remove-site` 结束时也会同步审计规则。
 
 ## 测试建议
 

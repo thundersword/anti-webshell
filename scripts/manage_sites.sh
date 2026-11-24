@@ -4,6 +4,7 @@
 #
 # Usage:
 #   manage_sites.sh install
+#   manage_sites.sh sync-audit
 #   manage_sites.sh add-site <site_id> <project_dir> [profile]
 #   manage_sites.sh remove-site <site_id>
 #   manage_sites.sh list-sites
@@ -20,6 +21,8 @@ INSTALL_DIR="/opt/webshell_monitor"
 CONFIG_ROOT="/etc/webshell-monitor/sites"
 LOG_ROOT="/var/log/webshell"
 SERVICE_TEMPLATE="webshell-monitor@.service"
+# Copied for later add-site. cmd_install does not execute this script.
+RENDER_SITE_CONFIG="$SCRIPT_HOME/render_site_config.sh"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -37,6 +40,28 @@ require_root() {
     fi
 }
 
+prepare_investigate_conf() {
+    local dest="$1"
+    local probe_root="${2:-/}"
+    if [ -f "$dest" ]; then
+        return 0
+    fi
+    local access=""
+    local nginx="${probe_root%/}/var/log/nginx/access.log"
+    local apache="${probe_root%/}/var/log/apache2/access.log"
+    if [ -f "$nginx" ]; then
+        access="$nginx"
+    elif [ -f "$apache" ]; then
+        access="$apache"
+    fi
+    mkdir -p "$(dirname "$dest")"
+    cat > "$dest" << EOF
+DEFAULT_ACCESS_LOG="$access"
+AUTH_LOG="/var/log/auth.log"
+AUDIT_LOG="/var/log/audit/audit.log"
+EOF
+}
+
 cmd_install() {
     require_root
     print_msg "安装 webshell monitor 引擎与 systemd 模板..."
@@ -45,10 +70,12 @@ cmd_install() {
         /var/quarantine /var/webshell_backup
 
     cp "$SCRIPT_HOME/webshell_monitor.sh" "$INSTALL_DIR/"
-    cp "$SCRIPT_HOME/render_site_config.sh" "$INSTALL_DIR/"
+    cp "$RENDER_SITE_CONFIG" "$INSTALL_DIR/"
     cp "$SCRIPT_HOME/render_controlplane.sh" "$INSTALL_DIR/"
     cp "$SCRIPT_HOME/manage_sites.sh" "$INSTALL_DIR/"
+    cp "$SCRIPT_HOME/sync_audit.sh" "$INSTALL_DIR/"
     chmod +x "$INSTALL_DIR"/*.sh
+    chmod +x "$INSTALL_DIR/sync_audit.sh"
 
     mkdir -p "$INSTALL_DIR/profiles" "$INSTALL_DIR/rules"
     cp -a "$SCRIPT_HOME/profiles/." "$INSTALL_DIR/profiles/"
@@ -115,6 +142,15 @@ EOF
     fi
 
     systemctl daemon-reload
+
+    prepare_investigate_conf /etc/webshell-monitor/investigate.conf /
+    if command -v apt-get >/dev/null 2>&1 && ! command -v auditctl >/dev/null 2>&1; then
+        apt-get update -qq || true
+        apt-get install -y auditd || print_warning "auditd 未装上，时间线将缺少进程记录"
+    fi
+    CONFIG_ROOT="$CONFIG_ROOT" "$INSTALL_DIR/sync_audit.sh" || print_warning "审计规则未加载"
+    systemctl restart 'webshell-monitor@*' || true
+
     print_msg "安装完成。下一步: $0 add-site <site_id> <project_dir> [profile]"
     echo ""
     echo "建议: $0 ensure-self"
@@ -152,6 +188,7 @@ cmd_add_site() {
     systemctl restart "webshell-monitor@${site_id}.service"
     print_msg "站点已添加并启动: $site_id (profile=$profile)"
     systemctl --no-pager status "webshell-monitor@${site_id}.service" || true
+    CONFIG_ROOT="$CONFIG_ROOT" "$INSTALL_DIR/sync_audit.sh" || print_warning "审计规则未加载"
 }
 
 cmd_remove_site() {
@@ -177,6 +214,12 @@ cmd_remove_site() {
 
     print_msg "已移除站点服务与配置: $site_id"
     print_warning "隔离区/备份未删除: /var/quarantine/$site_id /var/webshell_backup/$site_id"
+    CONFIG_ROOT="$CONFIG_ROOT" "$INSTALL_DIR/sync_audit.sh" || print_warning "审计规则未加载"
+}
+
+cmd_sync_audit() {
+    require_root
+    CONFIG_ROOT="$CONFIG_ROOT" "$INSTALL_DIR/sync_audit.sh" || print_warning "审计规则未加载"
 }
 
 cmd_ensure_self() {
@@ -301,6 +344,7 @@ usage() {
     cat <<EOF
 用法:
   $0 install
+  $0 sync-audit
   $0 add-site <site_id> <project_dir> [profile] [render options...]
   $0 remove-site <site_id>
   $0 list-sites
@@ -314,8 +358,13 @@ usage() {
   add-site 的 --alert-email / --wechat-webhook / --dingtalk-webhook 仅用于 render；
   全局告警请在 GUI「配置 → 告警配置」维护。
 
+  sync-audit 按站点配置重写审计规则并加载。手工规则只写
+  /etc/webshell-monitor/audit.local.rules，不要手改
+  /etc/audit/rules.d/webshell.rules，规则中不要写 -e 2。
+
 示例:
   $0 install
+  $0 sync-audit
   $0 add-site blog /www/wwwroot/blog thinkphp --alert-email admin@example.com
   $0 add-site shop /www/wwwroot/shop laravel
   $0 list-sites
@@ -330,6 +379,7 @@ main() {
     shift || true
     case "$cmd" in
         install) cmd_install ;;
+        sync-audit) cmd_sync_audit ;;
         add-site) cmd_add_site "$@" ;;
         remove-site) cmd_remove_site "$@" ;;
         list-sites) cmd_list_sites ;;
