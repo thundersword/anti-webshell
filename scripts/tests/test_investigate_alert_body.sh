@@ -25,6 +25,9 @@ while [ $# -gt 0 ]; do
       file=$2
       shift 2
       ;;
+    --incident-id)
+      shift 2
+      ;;
     *)
       shift
       ;;
@@ -101,6 +104,27 @@ run_investigate "$capture"
 printf '%s\n' '入侵路径 [blog] 置信度: 高' > "$TMP/want-ok.txt"
 cmp -s "$TMP/want-ok.txt" "$capture" || {
   echo "FAIL: success body was not forwarded unchanged" >&2
+  cat "$capture" >&2
+  exit 1
+}
+
+# timeout exit 124 overwrites any partial stdout with the section 9 timeout body.
+cat > "$HIDE/timeout" << 'EOF'
+#!/bin/sh
+printf '%s\n' '入侵路径 [blog] 置信度: 高'
+exit 124
+EOF
+chmod +x "$HIDE/timeout"
+capture="$TMP/timeout.txt"
+run_investigate "$capture"
+grep -qx '原因: 分析超时' "$capture" || {
+  echo "FAIL: timeout reason" >&2
+  cat "$capture" >&2
+  exit 1
+}
+first="$(head -n 1 "$capture")"
+[ "$first" = "未能生成入侵时间线 [blog]" ] || {
+  echo "FAIL: timeout first line: $first" >&2
   cat "$capture" >&2
   exit 1
 }

@@ -146,7 +146,7 @@ GUI 建站时可点「探测框架」，或 CLI 使用对应 profile 名。
 
 `install` 会重启已有的 `webshell-monitor@*`，并且不重写已有站点 conf、关键文件列表和白名单。`/etc/webshell-monitor/investigate.conf` 只在文件不存在时创建。若 `/var/log/nginx/access.log` 或 `/var/log/apache2/access.log` 存在，则写入 `DEFAULT_ACCESS_LOG`。不会自动选用 `/www/wwwlogs/*.log`。全局访问日志为空时，在控制面为该站点填写访问日志。
 
-手工排除或临时停用某个目录时，只编辑 `/etc/webshell-monitor/audit.local.rules`。不要手改 `/etc/audit/rules.d/webshell.rules`。不要在规则里写 `-e 2`。改完后执行：
+手工排除或临时停用某个目录时，只编辑 `/etc/webshell-monitor/audit.local.rules`。不要手改 `/etc/audit/rules.d/webshell.rules`。不要在规则里写 `-e 2`。本地文件里的 `never` 规则会排到生成的 `always` 规则之前，其余行仍接在末尾，这样目录排除才会生效。改完后执行：
 
 ```bash
 sudo /opt/webshell_monitor/manage_sites.sh sync-audit

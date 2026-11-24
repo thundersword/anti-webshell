@@ -211,7 +211,7 @@ def event_timeline(event_pk):
     if result.ok:
         timeline = (result.data or {}).get("timeline") or {}
         return jsonify(timeline), 200
-    created = event.created_at or datetime.utcnow()
-    if datetime.utcnow() - created < timedelta(seconds=30):
+    created = event.created_at or datetime.now()
+    if datetime.now() - created < timedelta(seconds=30):
         return jsonify(status="pending"), 202
     return jsonify(status="missing", message=_later_failure_message(site, event)), 404

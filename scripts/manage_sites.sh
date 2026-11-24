@@ -371,7 +371,8 @@ usage() {
   全局告警请在 GUI「配置 → 告警配置」维护。
 
   sync-audit 按站点配置重写审计规则并加载。手工规则只写
-  /etc/webshell-monitor/audit.local.rules，不要手改
+  /etc/webshell-monitor/audit.local.rules，其中本地 never 规则会排在生成的
+  always 规则之前。不要手改
   /etc/audit/rules.d/webshell.rules，规则中不要写 -e 2。
 
 示例:

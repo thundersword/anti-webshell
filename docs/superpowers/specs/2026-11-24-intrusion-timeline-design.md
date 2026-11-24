@@ -102,7 +102,7 @@ SITE_HOSTS=""
 2. 排除目录来自该 Profile 的 `INOTIFY_EXCLUDE` 以及引擎 `is_noisy_path` 已跳过的路径段（`.git`、`vendor`、`runtime`、`Runtime`、`storage/framework`、`storage/logs`、`bootstrap/cache`）。**不使用白名单目录**，上传目录仍要审计。
 3. 每个排除目录写在前面：`-a never,exit -F dir=<path> -k webshell_exclude`。
 4. 每个监控根随后写两条：`arch=b64` 与 `arch=b32` 的 `-a always,exit -F dir=<path> -F perm=wa -k webshell_write`。
-5. 把 `/etc/webshell-monitor/audit.local.rules` 原样接在末尾。该文件不存在则跳过。升级、建站、删站都不改它。
+5. 读取 `/etc/webshell-monitor/audit.local.rules`（不存在则跳过）。修剪空白后以 `-a never` 或 `-A never` 开头的行，按原顺序写在两条文件头注释之后、任何生成的 `-a always,exit` 之前；其余行按原顺序接在生成规则末尾。升级、建站、删站都不改该文件。
 6. 写入 `/etc/audit/rules.d/webshell.rules`（文件头注释写明会被覆盖），执行 `augenrules --load`。
 
 生成结果不得包含 `-e 2`。手工排除、临时停用某个目录，只编辑 `audit.local.rules`，然后：
@@ -261,7 +261,7 @@ Python 夹具（不启动 auditd、不启动 Web 服务器）：
 
 Shell：
 
-- 两站点生成的规则中，`never` 在对应 `always` 之前；`audit.local.rules` 被原样拼接；结果不含 `-e 2`
+- 两站点生成的规则中，`never` 在对应 `always` 之前；本地 `never` 规则排在生成的 `always` 之前，其余本地行接在末尾；结果不含 `-e 2`
 - 白名单目录不会变成 `never` 规则
 - 已有 conf 在 `install` 逻辑中不被重写（对渲染/同步函数做隔离测试，不要求在开发机上真的重启 systemd）
 

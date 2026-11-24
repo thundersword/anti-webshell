@@ -410,8 +410,8 @@ def test_timeline_pending_then_ready_then_missing(client, tmp_path, monkeypatch)
     })
     log = tmp_path / "blog.log"
     from datetime import datetime, timedelta
-    recent = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-    old = (datetime.utcnow() - timedelta(seconds=120)).strftime("%Y-%m-%d %H:%M:%S")
+    recent = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    old = (datetime.now() - timedelta(seconds=120)).strftime("%Y-%m-%d %H:%M:%S")
     log.write_text(
         f"[{recent}] [CRITICAL] [site=blog] 文件已隔离: /tmp/a.php -> /tmp/q incident=20261124T034211Z_ab12cd34\n"
         f"[{old}] [CRITICAL] [site=blog] 文件已隔离: /tmp/b.php -> /tmp/q2 incident=20261124T000000Z_bbbbbbbb\n",

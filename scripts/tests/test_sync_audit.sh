@@ -20,6 +20,7 @@ printf '%s\n' "$TMP/www/blog" "$TMP/extra" > "$TMP/sites/blog.watch"
 cat > "$TMP/local.rules" << 'EOF'
 # operator exclude
 -a never,exit -F dir=/tmp/skip-me -k webshell_exclude
+-a always,exit -F dir=/tmp/extra-watch -F perm=wa -k webshell_write
 EOF
 
 WEBSHELL_AUDIT_DRY_RUN=1 \
@@ -51,6 +52,20 @@ always = text.find("-F dir=$TMP/www/shop ")
 shop_always = text.find("dir=$TMP/www/shop -F perm=wa")
 shop_never = text.find("dir=$TMP/www/shop/runtime")
 assert shop_never != -1 and shop_always != -1 and shop_never < shop_always, (shop_never, shop_always)
+lines = text.splitlines()
+skip = next(i for i, line in enumerate(lines) if "/tmp/skip-me" in line)
+first_perm = next(i for i, line in enumerate(lines) if "perm=wa" in line)
+generated_write = [
+    i for i, line in enumerate(lines)
+    if "webshell_write" in line and "arch=" in line
+]
+assert generated_write, "no generated webshell_write"
+last_generated = generated_write[-1]
+extra = next(i for i, line in enumerate(lines) if "/tmp/extra-watch" in line)
+comment = next(i for i, line in enumerate(lines) if line.strip() == "# operator exclude")
+assert skip < first_perm, (skip, first_perm)
+assert extra > last_generated, (extra, last_generated)
+assert comment > last_generated, (comment, last_generated)
 print("order ok")
 PY
 echo OK

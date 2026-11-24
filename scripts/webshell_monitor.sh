@@ -44,6 +44,7 @@ PRINT_WATCH_DIRS=0
 SELF_TEST_CREATE_ALERT=0
 SELF_TEST_INVESTIGATE=0
 SEND_ALERT_FILE=""
+INCIDENT_ID=""
 # Relaxed logging: skip hard failures when appending to LOG_FILE (debug CLI only).
 LOG_RELAXED=0
 
@@ -253,16 +254,42 @@ send_alert() {
 }
 
 # Second alert from an investigation body. Does not enter the monitor loop.
+# The mailed body stays the file contents. When an incident id is present, the
+# site log line names that id instead of repeating the alert's first line.
 send_alert_from_file() {
     local path=$1
-    local first="" subject body
+    local incident_id=${2:-}
+    local first="" subject body log_line reason_line line
     if [ ! -f "$path" ]; then
         log_message "CRITICAL" "入侵分析告警文件不存在: $path"
         return 1
     fi
     IFS= read -r first < "$path" || true
     body=$(cat "$path" || true)
-    log_message "CRITICAL" "$first"
+    log_line=$first
+    if [ -n "$incident_id" ]; then
+        case "$first" in
+            入侵路径*)
+                log_line="入侵结论 incident=${incident_id}"
+                ;;
+            *)
+                log_line="未能生成入侵时间线 incident=${incident_id}"
+                reason_line=""
+                while IFS= read -r line || [ -n "$line" ]; do
+                    case "$line" in
+                        原因:*)
+                            reason_line=$line
+                            break
+                            ;;
+                    esac
+                done < "$path"
+                if [ -n "$reason_line" ]; then
+                    log_line="${log_line} ${reason_line}"
+                fi
+                ;;
+        esac
+    fi
+    log_message "CRITICAL" "$log_line"
     case "$first" in
         入侵路径*)
             subject="入侵路径 [$SITE_ID]"
@@ -554,11 +581,10 @@ PY
         return 0
     fi
 
-    record_investigate_command "systemd-run --scope --collect --unit=webshell-investigate-${SITE_ID}-${incident_id} --property=RuntimeMaxSec=20 ${SCRIPT_HOME}/webshell_investigate.sh --site ${SITE_ID} --anchor ${anchor_path}"
+    record_investigate_command "systemd-run --scope --collect --unit=webshell-investigate-${SITE_ID}-${incident_id} ${SCRIPT_HOME}/webshell_investigate.sh --site ${SITE_ID} --anchor ${anchor_path}"
     log_message "INFO" "已启动入侵分析 incident=$incident_id"
     systemd-run --scope --collect \
         --unit="webshell-investigate-${SITE_ID}-${incident_id}" \
-        --property=RuntimeMaxSec=20 \
         "$SCRIPT_HOME/webshell_investigate.sh" --site "$SITE_ID" --anchor "$anchor_path" &
     return 0
 }
@@ -1224,7 +1250,7 @@ Webshell监控脚本（多站点）
   $0 --site <id> --lock          对关键文件 chattr +i（阻止修改）
   $0 --site <id> --unlock        解除关键文件不可变属性（发版前）
   $0 --site <id> --lock-status   查看关键文件锁定状态
-  $0 --site <id> --send-alert-file <文件>  发送入侵时间线告警后退出
+  $0 --site <id> --incident-id <id> --send-alert-file <文件>  发送入侵时间线告警后退出
   $0 --help                      显示帮助信息
 
 调试（无需 --site）:
@@ -1251,6 +1277,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --send-alert-file)
             SEND_ALERT_FILE="$2"
+            shift 2
+            ;;
+        --incident-id)
+            INCIDENT_ID="$2"
             shift 2
             ;;
         --report)
@@ -1346,7 +1376,7 @@ require_site_arg
 load_site_config "$SITE_ID"
 
 if [ -n "${SEND_ALERT_FILE:-}" ]; then
-    send_alert_from_file "$SEND_ALERT_FILE" || exit $?
+    send_alert_from_file "$SEND_ALERT_FILE" "${INCIDENT_ID:-}" || exit $?
     exit 0
 fi
 

@@ -67,10 +67,17 @@ if ! command -v python3 >/dev/null 2>&1; then
   write_failure_body "python3 不可用"
 else
   set +e
-  python3 "$SCRIPT_HOME/webshell_investigate.py" --anchor "$ANCHOR" --output "$OUT" > "$BODY" 2>"$ERR"
-  py_rc=$?
+  if command -v timeout >/dev/null 2>&1; then
+    timeout 20 python3 "$SCRIPT_HOME/webshell_investigate.py" --anchor "$ANCHOR" --output "$OUT" > "$BODY" 2>"$ERR"
+    py_rc=$?
+  else
+    python3 "$SCRIPT_HOME/webshell_investigate.py" --anchor "$ANCHOR" --output "$OUT" > "$BODY" 2>"$ERR"
+    py_rc=$?
+  fi
   set -e
-  if [ ! -s "$BODY" ]; then
+  if [ "$py_rc" -eq 124 ]; then
+    write_failure_body "分析超时"
+  elif [ ! -s "$BODY" ]; then
     if [ "$py_rc" -eq 127 ]; then
       write_failure_body "python3 不可用"
     else
@@ -85,5 +92,7 @@ monitor="$SCRIPT_HOME/webshell_monitor.sh"
 if monitor_on_path=$(command -v webshell_monitor.sh 2>/dev/null); then
   monitor="$monitor_on_path"
 fi
-"$monitor" --site "$SITE" --send-alert-file "$BODY" || true
+incident_id="${ANCHOR##*/}"
+incident_id="${incident_id%.anchor.json}"
+"$monitor" --site "$SITE" --incident-id "$incident_id" --send-alert-file "$BODY" || true
 exit 0
