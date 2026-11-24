@@ -1,4 +1,5 @@
 import importlib.util
+import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -73,6 +74,16 @@ def audit_write(ts, exe, comm, uid, path, auid=None):
 
 def auth_accepted(ts, user, ip):
     stamp = ts.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return (
+        f"{stamp} host sshd[1]: Accepted password for {user} "
+        f"from {ip} port 22 ssh2"
+    )
+
+
+def auth_syslog(ts, user, ip):
+    """Traditional syslog stamp: host-local wall clock, no timezone."""
+    local = ts.astimezone()
+    stamp = f"{_MONTHS[local.month - 1]} {local.day:2d} {local.strftime('%H:%M:%S')}"
     return (
         f"{stamp} host sshd[1]: Accepted password for {user} "
         f"from {ip} port 22 ssh2"
@@ -157,3 +168,44 @@ def test_global_log_without_hosts_marks_http_gap():
     assert timeline["entry"] == "unknown"
     assert timeline["confidence"] == "low"
     assert timeline["actor"]["ip"] == ""
+
+
+def test_syslog_local_accepted_is_ssh():
+    when = T - timedelta(minutes=5)
+    timeline = investigate(anchor(), {
+        "audit": audit_write(ts=T, exe="/bin/bash", comm="bash", uid="root", auid="root", path=FILE),
+        "access": "",
+        "auth": auth_syslog(when, user="root", ip="9.9.9.9"),
+    })
+    assert timeline["entry"] == "ssh"
+    assert timeline["actor"]["ip"] == "9.9.9.9"
+
+
+def _timeline_for_access_file(directory: Path, earliest):
+    directory.mkdir(parents=True, exist_ok=True)
+    log_path = directory / "access.log"
+    log_path.write_text(
+        combined(earliest, "GET", "/a.php", "1.2.3.4", 200, "blog.example") + "\n",
+        encoding="utf-8",
+    )
+    (directory / "access.log.1").write_text("rotated\n", encoding="utf-8")
+    anc = anchor()
+    anc["access_log"] = str(log_path)
+    anchor_path = directory / "incident.anchor.json"
+    output_path = directory / "timeline.json"
+    anchor_path.write_text(json.dumps(anc), encoding="utf-8")
+    code = mod.main(["--anchor", str(anchor_path), "--output", str(output_path)])
+    body = output_path.read_text(encoding="utf-8") if output_path.exists() else ""
+    assert code == 0, body
+    return json.loads(body)
+
+
+def test_rotated_gap_only_when_earliest_line_misses_lookback(tmp_path, monkeypatch):
+    monkeypatch.setenv("WEBSHELL_INVESTIGATE_CONF", str(tmp_path / "investigate.conf"))
+    (tmp_path / "investigate.conf").write_text("", encoding="utf-8")
+    # Earliest line sits on the lookback start, so the retained file covers it.
+    covered = _timeline_for_access_file(tmp_path / "covered", T - timedelta(minutes=30))
+    assert "未读取已轮转日志" not in covered["gaps"]
+    # Earliest line is after T-30min, so the retained file does not cover the window.
+    missed = _timeline_for_access_file(tmp_path / "missed", T - timedelta(minutes=10))
+    assert "未读取已轮转日志" in missed["gaps"]

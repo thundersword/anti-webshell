@@ -486,12 +486,13 @@ def _parse_auth_time(line: str, year_hint: datetime) -> datetime | None:
     if month > year_hint.month + 1:
         year -= 1
     try:
-        return datetime(
+        # Traditional syslog has no zone. The clock is the host's local time.
+        parsed = datetime(
             year, month, int(syslog.group(2)),
             int(syslog.group(3)), int(syslog.group(4)), int(syslog.group(5)),
-            tzinfo=timezone.utc,
         )
-    except ValueError:
+        return parsed.astimezone(timezone.utc)
+    except (ValueError, OverflowError, OSError):
         return None
 
 
@@ -761,33 +762,96 @@ def _alert_process(exe: str, uid: str) -> str:
 
 def _load_logs(anchor: dict) -> tuple[dict, list[str]]:
     conf = _read_conf()
-    access_path = anchor.get("access_log") or ""
-    audit_path = anchor.get("audit_log") or conf.get("AUDIT_LOG") or ""
-    auth_path = anchor.get("auth_log") or conf.get("AUTH_LOG") or ""
-    access, access_gaps = _read_optional(access_path)
-    audit, audit_gaps = _read_optional(audit_path)
-    auth, auth_gaps = _read_optional(auth_path)
-    return {"access": access, "audit": audit, "auth": auth}, access_gaps + audit_gaps + auth_gaps
+    paths = {
+        "access": anchor.get("access_log") or "",
+        "audit": anchor.get("audit_log") or conf.get("AUDIT_LOG") or "",
+        "auth": anchor.get("auth_log") or conf.get("AUTH_LOG") or "",
+    }
+    logs: dict[str, str | None] = {}
+    gaps: list[str] = []
+    infos: dict[str, dict] = {}
+    for kind, path in paths.items():
+        text, file_gaps, info = _read_optional(path)
+        logs[kind] = text
+        gaps.extend(file_gaps)
+        infos[kind] = info
+    gaps.extend(_rotation_gaps(anchor, logs, infos))
+    return logs, gaps
 
 
-def _read_optional(path: str) -> tuple[str | None, list[str]]:
+def _read_optional(path: str) -> tuple[str | None, list[str], dict]:
+    info = {"truncated": False, "rotated": False}
     if not path:
-        return None, []
+        return None, [], info
     try:
         text = read_log_tail(path)
     except (OSError, ValueError):
-        return None, []
+        return None, [], info
     gaps = []
     try:
         if os.path.getsize(path) > TAIL_LIMIT:
             gaps.append("日志窗口超出当前文件末尾 32MB")
+            info["truncated"] = True
     except OSError:
         pass
-    for suffix in (".1", ".1.gz"):
-        if os.path.exists(path + suffix):
+    info["rotated"] = any(os.path.exists(path + suffix) for suffix in (".1", ".1.gz"))
+    return text, gaps, info
+
+
+def _rotation_gaps(anchor: dict, logs: dict, infos: dict) -> list[str]:
+    """Flag unread rotations only when this file does not cover T-30min.
+
+    A sibling ``.1`` / ``.1.gz`` is not enough. The retained file misses the
+    lookback when its earliest parsed timestamp is later than the window
+    start. A read that already stopped at 32MB keeps that gap alone.
+    """
+    event_time = anchor.get("event_time")
+    if not event_time:
+        return []
+    try:
+        quarantine = _parse_time(event_time)
+    except (TypeError, ValueError):
+        return []
+    records = _parse_audit(logs.get("audit") or "", anchor.get("file_path") or "")
+    _, write_at, _ = _select_write(records, quarantine)
+    window_start = write_at - timedelta(minutes=30)
+    gaps = []
+    for kind, info in infos.items():
+        if info.get("truncated") or not info.get("rotated"):
+            continue
+        earliest = _earliest_parsed(kind, logs.get(kind), quarantine)
+        if earliest is not None and earliest > window_start:
             gaps.append("未读取已轮转日志")
-            break
-    return text, gaps
+    return gaps
+
+
+def _earliest_parsed(kind: str, text: str | None, year_hint: datetime) -> datetime | None:
+    if not text or not str(text).strip():
+        return None
+    stamps: list[datetime] = []
+    if kind == "access":
+        for line in str(text).splitlines():
+            if not line.strip():
+                continue
+            matched = ACCESS_RE.match(line.strip())
+            if not matched:
+                continue
+            stamp = _parse_access_time(matched.group("ts"))
+            if stamp is not None:
+                stamps.append(stamp)
+    elif kind == "audit":
+        for matched in AUDIT_MSG_RE.finditer(str(text)):
+            stamps.append(_audit_time(matched.group(1)))
+    elif kind == "auth":
+        for line in str(text).splitlines():
+            if not line.strip():
+                continue
+            stamp = _parse_auth_time(line, year_hint)
+            if stamp is not None:
+                stamps.append(stamp)
+    if not stamps:
+        return None
+    return min(stamps)
 
 
 def _read_conf() -> dict:
