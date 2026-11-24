@@ -33,6 +33,8 @@ printf '%s\n' "$RULES" | grep -q 'overwritten'
 printf '%s\n' "$RULES" | grep -q -- '-e 2' && { echo "FAIL: locked audit"; exit 1; }
 printf '%s\n' "$RULES" | grep -q "$TMP/www/shop/uploads" && { echo "FAIL: whitelist excluded"; exit 1; }
 printf '%s\n' "$RULES" | grep -q -- '-F dir='"$TMP/www/shop/runtime"
+printf '%s\n' "$RULES" | grep -q -- '-F dir='"$TMP/www/shop/.git"
+printf '%s\n' "$RULES" | grep -Fq -- '-F dir='"$TMP/www/shop/git" && { echo "FAIL: spurious git exclude (want .git)"; exit 1; }
 printf '%s\n' "$RULES" | grep -q -- '-F dir='"$TMP/www/blog"
 printf '%s\n' "$RULES" | grep -q -- '-F dir='"$TMP/extra"
 printf '%s\n' "$RULES" | grep -q 'arch=b64'
