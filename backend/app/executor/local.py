@@ -466,6 +466,51 @@ class LocalSystemdExecutor(Executor):
         )
         return ExecResult(ok=True, data=data)
 
+    def investigate_path(self, site_id: str, file_path: str, quarantine: bool = False) -> ExecResult:
+        if not SITE_ID_RE.match(site_id):
+            return ExecResult(ok=False, message="invalid site_id")
+        script = self.install_dir / "webshell_monitor.sh"
+        args = [str(script), "--site", site_id, "--investigate", file_path]
+        if quarantine:
+            args.append("--quarantine")
+        if self.dry_run:
+            return ExecResult(
+                ok=True,
+                message="dry-run",
+                stdout="incident=dryrun0001\n" + " ".join(args),
+                data={"incident_id": "dryrun0001", "command": args},
+            )
+        try:
+            proc = subprocess.run(
+                args,
+                capture_output=True,
+                text=True,
+                timeout=60,
+                check=False,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return ExecResult(ok=False, message=str(exc))
+        blob = (proc.stdout or "") + "\n" + (proc.stderr or "")
+        match = re.search(r"incident=([A-Za-z0-9_]+)", blob)
+        incident_id = match.group(1) if match else ""
+        if proc.returncode != 0:
+            detail = (proc.stderr or proc.stdout or "追踪失败").strip()
+            message = detail.splitlines()[-1] if detail else "追踪失败"
+            return ExecResult(
+                ok=False,
+                message=message,
+                stdout=proc.stdout or "",
+                stderr=proc.stderr or "",
+            )
+        if not incident_id:
+            return ExecResult(ok=False, message="未获得 incident_id", stdout=proc.stdout or "")
+        return ExecResult(
+            ok=True,
+            message="started",
+            stdout=proc.stdout or "",
+            data={"incident_id": incident_id, "command": args},
+        )
+
     def sync_audit(self) -> ExecResult:
         script = self.install_dir / "sync_audit.sh"
         if self.dry_run:
@@ -547,6 +592,9 @@ class RemoteAgentExecutor(Executor):
         return self._nyi()
 
     def audit_status(self, site_id: str) -> ExecResult:
+        return self._nyi()
+
+    def investigate_path(self, site_id: str, file_path: str, quarantine: bool = False) -> ExecResult:
         return self._nyi()
 
 

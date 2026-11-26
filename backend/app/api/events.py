@@ -215,3 +215,32 @@ def event_timeline(event_pk):
     if datetime.now() - created < timedelta(seconds=30):
         return jsonify(status="pending"), 202
     return jsonify(status="missing", message=_later_failure_message(site, event)), 404
+
+
+@api_bp.post("/events/<int:event_pk>/investigate")
+@jwt_required()
+def investigate_event(event_pk):
+    site = _current_site()
+    if not site:
+        return jsonify(error="站点不存在"), 404
+    event = MonitorEvent.query.filter_by(id=event_pk, site_id=site.site_id).first()
+    if not event:
+        return jsonify(error="事件不存在"), 404
+    if event.event_type != "file_create":
+        return jsonify(error="只能追踪新增文件"), 400
+    if event.incident_id:
+        return jsonify(error="该事件已有追踪"), 409
+    path = event.file_path or ""
+    if not path.startswith("/"):
+        return jsonify(error="事件没有可追踪的文件路径"), 400
+    body = request.get_json(silent=True) or {}
+    quarantine = bool(body.get("quarantine"))
+    result = get_executor_for_node(site.node_id).investigate_path(site.site_id, path, quarantine)
+    if not result.ok:
+        return jsonify(error=result.message or "追踪失败"), 400
+    incident_id = (result.data or {}).get("incident_id") or ""
+    if not incident_id:
+        return jsonify(error="未获得 incident_id"), 500
+    event.incident_id = incident_id
+    db.session.commit()
+    return jsonify(incident_id=incident_id, quarantine=quarantine)

@@ -45,6 +45,9 @@ SELF_TEST_CREATE_ALERT=0
 SELF_TEST_INVESTIGATE=0
 SEND_ALERT_FILE=""
 INCIDENT_ID=""
+INVESTIGATE_PATH=""
+INVESTIGATE_QUARANTINE=0
+INVESTIGATE_INCIDENT_ID=""
 # Relaxed logging: skip hard failures when appending to LOG_FILE (debug CLI only).
 LOG_RELAXED=0
 
@@ -608,6 +611,7 @@ quarantine_file() {
     if cp -p "$file" "$quarantine_path" 2>/dev/null; then
         rm -f "$file"
         incident_id=$(incident_id_for "$file")
+        INVESTIGATE_INCIDENT_ID=$incident_id
         event_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)
         log_message "CRITICAL" "文件已隔离: $file -> $quarantine_path incident=$incident_id"
         log_message "CRITICAL" "隔离原因: $reason"
@@ -630,6 +634,53 @@ quarantine_file() {
         log_message "ERROR" "无法隔离文件: $file"
         return 1
     fi
+}
+
+path_under_watch() {
+    local file=$1
+    local root
+    for root in "${WATCH_DIRS[@]}"; do
+        root="${root%/}"
+        case "$file" in
+            "$root"|"$root"/*) return 0 ;;
+        esac
+    done
+    return 1
+}
+
+# Track a file that was not quarantined automatically.
+# Arg 2 is 1 to quarantine first. Prints incident=<id> on success.
+manual_investigate() {
+    local file=$1
+    local do_quarantine=$2
+    local incident_id event_time
+
+    case "$file" in
+        /*) ;;
+        *)
+            echo "错误: 追踪路径必须是绝对路径" >&2
+            exit 1
+            ;;
+    esac
+    if [ ! -f "$file" ] || [ -L "$file" ]; then
+        echo "错误: 文件不存在或不是普通文件" >&2
+        exit 1
+    fi
+    if ! path_under_watch "$file"; then
+        echo "错误: 文件不在监控目录内" >&2
+        exit 1
+    fi
+    if [ "$do_quarantine" = "1" ]; then
+        quarantine_file "$file" "手动隔离并追踪" || exit 1
+        printf 'incident=%s\n' "$INVESTIGATE_INCIDENT_ID"
+        return 0
+    fi
+    incident_id=$(incident_id_for "$file")
+    INVESTIGATE_INCIDENT_ID=$incident_id
+    event_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    log_message "CRITICAL" "手动追踪: $file incident=$incident_id"
+    launch_investigation "$file" "$file" "手动追踪" "$incident_id" "$event_time" || true
+    printf 'incident=%s\n' "$incident_id"
 }
 
 handle_create() {
@@ -1251,6 +1302,7 @@ Webshell监控脚本（多站点）
   $0 --site <id> --unlock        解除关键文件不可变属性（发版前）
   $0 --site <id> --lock-status   查看关键文件锁定状态
   $0 --site <id> --incident-id <id> --send-alert-file <文件>  发送入侵时间线告警后退出
+  $0 --site <id> --investigate <绝对路径> [--quarantine]  手动追踪；--quarantine 时先隔离
   $0 --help                      显示帮助信息
 
 调试（无需 --site）:
@@ -1278,6 +1330,14 @@ while [[ $# -gt 0 ]]; do
         --send-alert-file)
             SEND_ALERT_FILE="$2"
             shift 2
+            ;;
+        --investigate)
+            INVESTIGATE_PATH="$2"
+            shift 2
+            ;;
+        --quarantine)
+            INVESTIGATE_QUARANTINE=1
+            shift
             ;;
         --incident-id)
             INCIDENT_ID="$2"
@@ -1372,8 +1432,18 @@ if [ "${SELF_TEST_INVESTIGATE:-0}" = "1" ]; then
     exit $?
 fi
 
+if [ "$INVESTIGATE_QUARANTINE" = "1" ] && [ -z "$INVESTIGATE_PATH" ]; then
+    echo "错误: --quarantine 需要 --investigate" >&2
+    exit 1
+fi
+
 require_site_arg
 load_site_config "$SITE_ID"
+
+if [ -n "$INVESTIGATE_PATH" ]; then
+    manual_investigate "$INVESTIGATE_PATH" "$INVESTIGATE_QUARANTINE"
+    exit 0
+fi
 
 if [ -n "${SEND_ALERT_FILE:-}" ]; then
     send_alert_from_file "$SEND_ALERT_FILE" "${INCIDENT_ID:-}" || exit $?

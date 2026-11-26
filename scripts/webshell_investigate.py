@@ -718,12 +718,16 @@ def _events(anchor, rows, record, auth_rows, chosen, write_at, quarantine, file_
             "summary": row["summary"],
         })
     reason = anchor.get("reason") or "隔离"
+    if reason == "手动追踪":
+        summary = f"手动追踪 {file_path}"
+    else:
+        summary = f"隔离 {file_path} {reason}".strip()
     events.append({
         "ts": _iso(quarantine),
         "_sort": quarantine,
         "source": "monitor",
         "kind": "quarantine",
-        "summary": f"隔离 {file_path} {reason}".strip(),
+        "summary": summary,
     })
     events.sort(key=lambda item: (item["_sort"], item["source"]))
     for item in events:

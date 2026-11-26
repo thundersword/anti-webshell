@@ -31,6 +31,14 @@
         </el-table-column>
         <el-table-column prop="action_taken" label="采取行动" width="150" />
         <el-table-column prop="created_at" label="时间" width="180" />
+        <el-table-column label="追踪" width="180">
+          <template #default="{ row }">
+            <template v-if="canTrack(row)">
+              <el-button size="small" link type="primary" @click.stop="startTrack(row, false)">追踪</el-button>
+              <el-button size="small" link type="danger" @click.stop="startTrack(row, true)">追踪并隔离</el-button>
+            </template>
+          </template>
+        </el-table-column>
       </el-table>
       
       <div class="pagination">
@@ -93,6 +101,7 @@
 
 <script>
 import { ref, computed, watch, onMounted } from 'vue'
+import { ElMessage } from 'element-plus'
 import api from '../api/index.js'
 
 export default {
@@ -189,6 +198,30 @@ export default {
       }
     }
 
+    const canTrack = (row) => (
+      !!row
+      && row.event_type === 'file_create'
+      && !row.incident_id
+      && typeof row.file_path === 'string'
+      && row.file_path.startsWith('/')
+    )
+
+    const startTrack = async (row, quarantine) => {
+      if (!canTrack(row)) return
+      try {
+        const data = await api.post(
+          '/events/' + row.id + '/investigate',
+          { quarantine },
+          { skipErrorToast: true }
+        )
+        row.incident_id = data.incident_id
+        ElMessage.success(quarantine ? '已隔离并开始追踪' : '已开始追踪')
+      } catch (error) {
+        const data = error.response && error.response.data
+        ElMessage.error((data && data.error) || '追踪失败')
+      }
+    }
+
     const openTimeline = (row) => {
       if (!row || !row.incident_id) return
       currentEventId.value = row.id
@@ -274,7 +307,9 @@ export default {
       displayValue,
       openTimeline,
       loadTimeline,
-      rowClassName
+      rowClassName,
+      canTrack,
+      startTrack
     }
   }
 }

@@ -470,3 +470,56 @@ def test_audit_status_dry_run_commands(client, tmp_path):
     assert body["check_command"] == "sudo auditctl -l | grep webshell"
     assert body["auditd"] == "unknown"
     assert body["rules_loaded"] is False
+
+
+def test_manual_investigate_from_create_event(client, tmp_path):
+    headers = _login(client)
+    project = tmp_path / "web"
+    project.mkdir()
+    client.post("/api/sites", headers=headers, json={
+        "site_id": "track", "name": "Track", "project_dir": str(project),
+        "profile": "plain_php", "start": False,
+    })
+    log = tmp_path / "track.log"
+    from datetime import datetime, timedelta
+    created_at = (datetime.now() - timedelta(seconds=5)).strftime("%Y-%m-%d %H:%M:%S")
+    quarantined_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    log.write_text(
+        f"[{created_at}] [WARNING] [site=track] 监控目录新增文件: /www/wwwroot/blog/public/uploads/a.jpg\n"
+        f"[{quarantined_at}] [CRITICAL] [site=track] 文件已隔离: /tmp/a.php -> /tmp/q incident=20261124T034211Z_ab12cd34\n",
+        encoding="utf-8",
+    )
+    conf = Path(os.environ["WEBSHELL_CONFIG_ROOT"]) / "track.conf"
+    conf.write_text(conf.read_text(encoding="utf-8") + f'LOG_FILE="{log}"\n', encoding="utf-8")
+    listed = client.get("/api/events/?site_id=track", headers=headers)
+    events = listed.get_json()["events"]
+    created = next(
+        (e for e in events if e["event_type"] == "file_create"),
+        None,
+    )
+    assert created is not None, [(e.get("event_type"), e.get("message")) for e in events]
+    quarantined = next(e for e in events if e["event_type"] == "quarantine")
+    assert created["file_path"] == "/www/wwwroot/blog/public/uploads/a.jpg"
+    assert not created["incident_id"]
+
+    started = client.post(
+        f"/api/events/{created['id']}/investigate?site_id=track",
+        headers=headers,
+        json={"quarantine": False},
+    )
+    assert started.status_code == 200
+    body = started.get_json()
+    assert body["incident_id"] == "dryrun0001"
+    assert body["quarantine"] is False
+    again = client.post(
+        f"/api/events/{created['id']}/investigate?site_id=track",
+        headers=headers,
+        json={"quarantine": True},
+    )
+    assert again.status_code == 409
+    refused = client.post(
+        f"/api/events/{quarantined['id']}/investigate?site_id=track",
+        headers=headers,
+        json={"quarantine": False},
+    )
+    assert refused.status_code == 400
