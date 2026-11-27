@@ -689,6 +689,10 @@ handle_create() {
         accept_config_write "$file"
         return 0
     fi
+    if release_in_progress; then
+        log_message "INFO" "发版中，已放行: $file"
+        return 0
+    fi
     if is_noisy_path "$file"; then
         return 0
     fi
@@ -903,6 +907,30 @@ accept_config_write() {
     log_message "INFO" "控制面更新配置，已接受: $file"
 }
 
+release_flag_path() {
+    printf '%s\n' "${WEBSHELL_RELEASE_FLAG:-/run/webshell-monitor/release-controlplane}"
+}
+
+release_in_progress() {
+    local flag
+    [ "${SITE_ID:-}" = "controlplane" ] || return 1
+    flag=$(release_flag_path)
+    [ -f "$flag" ]
+}
+
+begin_release() {
+    local flag
+    flag=$(release_flag_path)
+    mkdir -p "$(dirname "$flag")"
+    printf '%s\n' "release" > "$flag"
+    log_message "INFO" "发版放行已开启，锁定前不隔离控制面文件"
+}
+
+end_release() {
+    rm -f "$(release_flag_path)"
+    log_message "INFO" "发版放行已结束"
+}
+
 path_is_critical() {
     local file=$1
     local critical_file
@@ -971,6 +999,10 @@ handle_modify() {
     local file=$1
     if config_write_allowed "$file"; then
         accept_config_write "$file"
+        return 0
+    fi
+    if release_in_progress; then
+        log_message "INFO" "发版中，已放行: $file"
         return 0
     fi
     if is_noisy_path "$file"; then
@@ -1398,7 +1430,7 @@ Webshell监控脚本（多站点）
   $0 --site <id> --restore <路径> 手动恢复指定文件
   $0 --site <id> --list-backups  列出所有备份文件
   $0 --site <id> --lock          对关键文件 chattr +i（阻止修改）
-  $0 --site <id> --unlock        解除关键文件不可变属性（发版前）
+  $0 --site <id> --unlock        解除锁定并放行发版，直到 --lock
   $0 --site <id> --lock-status   查看关键文件锁定状态
   $0 --site <id> --incident-id <id> --send-alert-file <文件>  发送入侵时间线告警后退出
   $0 --site <id> --investigate <绝对路径> [--quarantine]  手动追踪；--quarantine 时先隔离
@@ -1506,6 +1538,10 @@ while [[ $# -gt 0 ]]; do
             CONFIG_WRITE_PATH="$2"
             shift 2
             ;;
+        --release-status)
+            ACTION="release-status"
+            shift
+            ;;
         --help|-h)
             print_help
             exit 0
@@ -1590,10 +1626,13 @@ case "$ACTION" in
         ls -lh "$BACKUP_DIR" 2>/dev/null || echo "无备份文件"
         ;;
     lock)
+        refresh_backups
         lock_all_critical_files
+        end_release
         list_lock_status
         ;;
     unlock)
+        begin_release
         unlock_all_critical_files
         list_lock_status
         ;;
@@ -1615,6 +1654,13 @@ case "$ACTION" in
         else
             echo "未放行" >&2
             exit 2
+        fi
+        ;;
+    release-status)
+        if release_in_progress; then
+            echo release
+        else
+            echo enforce
         fi
         ;;
     run)

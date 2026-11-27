@@ -271,7 +271,7 @@ cmd_lock_self() {
         exit 1
     fi
     "$INSTALL_DIR/webshell_monitor.sh" --site controlplane --lock
-    print_msg "已锁定 controlplane 自保路径"
+    print_msg "已锁定 controlplane 自保路径，当前文件已记为备份"
 }
 
 cmd_unlock_self() {
@@ -281,7 +281,7 @@ cmd_unlock_self() {
         exit 1
     fi
     "$INSTALL_DIR/webshell_monitor.sh" --site controlplane --unlock
-    print_msg "已解锁 controlplane 自保路径"
+    print_msg "已解锁 controlplane。发版放行到 lock-self 为止，期间 git pull 不会被隔离"
 }
 
 cmd_disable_self() {
@@ -293,6 +293,7 @@ cmd_disable_self() {
     [[ "$ans" == "YES" ]] || { print_error "已取消"; exit 1; }
 
     cmd_unlock_self || true
+    rm -f /run/webshell-monitor/release-controlplane
     systemctl stop "webshell-monitor@controlplane.service" 2>/dev/null || true
     systemctl disable "webshell-monitor@controlplane.service" 2>/dev/null || true
 
