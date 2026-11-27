@@ -685,6 +685,10 @@ manual_investigate() {
 
 handle_create() {
     local file=$1
+    if config_write_allowed "$file"; then
+        accept_config_write "$file"
+        return 0
+    fi
     if is_noisy_path "$file"; then
         return 0
     fi
@@ -835,16 +839,107 @@ list_lock_status() {
 
 # Force refresh backups (overwrite)
 refresh_backups() {
-    local critical_file key backup_file
+    local critical_file
     for critical_file in "${CRITICAL_FILES[@]}"; do
         if [ -f "$critical_file" ]; then
-            key=$(backup_key_for_file "$critical_file")
-            backup_file="$BACKUP_DIR/${key}.backup"
-            mkdir -p "$(dirname "$backup_file")"
-            cp -p "$critical_file" "$backup_file"
-            log_message "INFO" "已更新备份: $key"
+            refresh_backup_for_file "$critical_file"
         fi
     done
+}
+
+refresh_backup_for_file() {
+    local file=$1
+    local key backup_file
+    [ -f "$file" ] || return 0
+    key=$(backup_key_for_file "$file")
+    backup_file="$BACKUP_DIR/${key}.backup"
+    mkdir -p "$(dirname "$backup_file")"
+    cp -p "$file" "$backup_file"
+    log_message "INFO" "已更新备份: $key"
+}
+
+config_write_dir() {
+    printf '%s\n' "${WEBSHELL_CONFIG_WRITE_DIR:-/run/webshell-monitor/config-writes}"
+}
+
+config_write_digest() {
+    local digest
+    digest=$(printf '%s' "$1" | sha256sum 2>/dev/null | awk '{print $1}')
+    if [ -z "$digest" ]; then
+        digest=$(printf '%s' "$1" | shasum -a 256 2>/dev/null | awk '{print $1}')
+    fi
+    printf '%s\n' "$digest"
+}
+
+allow_config_write() {
+    local file=$1
+    local digest dir stamp
+    digest=$(config_write_digest "$file")
+    [ -n "$digest" ] || return 1
+    dir=$(config_write_dir)
+    mkdir -p "$dir" || return 1
+    stamp="$dir/$digest"
+    printf '%s\n' "$file" > "$stamp"
+}
+
+config_write_allowed() {
+    local file=$1
+    local digest stamp now mtime age recorded
+    digest=$(config_write_digest "$file")
+    [ -n "$digest" ] || return 1
+    stamp="$(config_write_dir)/$digest"
+    [ -f "$stamp" ] || return 1
+    recorded=$(cat "$stamp" 2>/dev/null || true)
+    [ "$recorded" = "$file" ] || return 1
+    now=$(date +%s)
+    mtime=$(stat -c %Y "$stamp" 2>/dev/null || stat -f %m "$stamp" 2>/dev/null || echo 0)
+    age=$((now - mtime))
+    [ "$age" -ge 0 ] && [ "$age" -le 120 ]
+}
+
+accept_config_write() {
+    local file=$1
+    refresh_backup_for_file "$file"
+    log_message "INFO" "控制面更新配置，已接受: $file"
+}
+
+path_is_critical() {
+    local file=$1
+    local critical_file
+    for critical_file in "${CRITICAL_FILES[@]}"; do
+        [ "$critical_file" = "$file" ] && return 0
+    done
+    return 1
+}
+
+prepare_config_write() {
+    local file=$1
+    case "$file" in
+        /*) ;;
+        *)
+            echo "错误: 配置路径必须是绝对路径" >&2
+            exit 1
+            ;;
+    esac
+    allow_config_write "$file" || exit 1
+    unlock_one_file "$file"
+}
+
+finish_config_write() {
+    local file=$1
+    case "$file" in
+        /*) ;;
+        *)
+            echo "错误: 配置路径必须是绝对路径" >&2
+            exit 1
+            ;;
+    esac
+    if [ -f "$file" ]; then
+        refresh_backup_for_file "$file"
+    fi
+    if [ "${LOCK_CRITICAL_FILES:-false}" = "true" ] && path_is_critical "$file"; then
+        lock_one_file "$file" || true
+    fi
 }
 
 restore_from_backup() {
@@ -874,6 +969,10 @@ restore_from_backup() {
 
 handle_modify() {
     local file=$1
+    if config_write_allowed "$file"; then
+        accept_config_write "$file"
+        return 0
+    fi
     if is_noisy_path "$file"; then
         return 0
     fi
@@ -1392,6 +1491,21 @@ while [[ $# -gt 0 ]]; do
             SELF_TEST_INVESTIGATE=1
             shift
             ;;
+        --prepare-config-write)
+            ACTION="prepare-config-write"
+            CONFIG_WRITE_PATH="$2"
+            shift 2
+            ;;
+        --finish-config-write)
+            ACTION="finish-config-write"
+            CONFIG_WRITE_PATH="$2"
+            shift 2
+            ;;
+        --apply-config-write)
+            ACTION="apply-config-write"
+            CONFIG_WRITE_PATH="$2"
+            shift 2
+            ;;
         --help|-h)
             print_help
             exit 0
@@ -1485,6 +1599,23 @@ case "$ACTION" in
         ;;
     lock-status)
         list_lock_status
+        ;;
+    prepare-config-write)
+        [ -n "${CONFIG_WRITE_PATH:-}" ] || { echo "错误: 缺少配置路径" >&2; exit 1; }
+        prepare_config_write "$CONFIG_WRITE_PATH"
+        ;;
+    finish-config-write)
+        [ -n "${CONFIG_WRITE_PATH:-}" ] || { echo "错误: 缺少配置路径" >&2; exit 1; }
+        finish_config_write "$CONFIG_WRITE_PATH"
+        ;;
+    apply-config-write)
+        [ -n "${CONFIG_WRITE_PATH:-}" ] || { echo "错误: 缺少配置路径" >&2; exit 1; }
+        if config_write_allowed "$CONFIG_WRITE_PATH"; then
+            accept_config_write "$CONFIG_WRITE_PATH"
+        else
+            echo "未放行" >&2
+            exit 2
+        fi
         ;;
     run)
         main

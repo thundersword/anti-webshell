@@ -213,7 +213,11 @@ export default {
           payload.access_log = protect.value.access_log
           payload.site_hosts = protect.value.site_hosts
         }
-        await api.put(`/sites/${currentSiteId.value}`, payload)
+        const saved = await api.put(`/sites/${currentSiteId.value}`, payload)
+        if (saved && saved.sync_ok === false) {
+          ElMessage.error(saved.sync_message || '站点配置文件未更新')
+          return
+        }
         ElMessage.success('防护策略已保存')
         loadProtect()
       } catch (error) {

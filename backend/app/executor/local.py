@@ -90,11 +90,46 @@ class LocalSystemdExecutor(Executor):
         except Exception as exc:  # noqa: BLE001
             return ExecResult(ok=False, message=str(exc))
 
+    def _config_write_targets(self, site_id: str) -> List[Path]:
+        return [
+            self.config_root / f"{site_id}.conf",
+            self.config_root / f"{site_id}.critical",
+            self.config_root / f"{site_id}.whitelist",
+        ]
+
+    def _config_write_phase(self, phase: str, path: Path) -> None:
+        """Let the running self-guard accept one control-plane rewrite of path."""
+        script = self.install_dir / "webshell_monitor.sh"
+        if not script.is_file() or not (self.config_root / "controlplane.conf").is_file():
+            return
+        try:
+            subprocess.run(
+                [str(script), "--site", "controlplane", f"--{phase}-config-write", str(path)],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+        except Exception:  # noqa: BLE001
+            return
+
     def write_config(self, cfg: SiteRuntimeConfig) -> ExecResult:
         if not SITE_ID_RE.match(cfg.site_id):
             return ExecResult(ok=False, message="invalid site_id")
 
         self.config_root.mkdir(parents=True, exist_ok=True)
+        targets = self._config_write_targets(cfg.site_id)
+        if not self.dry_run:
+            for path in targets:
+                self._config_write_phase("prepare", path)
+        try:
+            return self._write_config_unlocked(cfg)
+        finally:
+            if not self.dry_run:
+                for path in targets:
+                    self._config_write_phase("finish", path)
+
+    def _write_config_unlocked(self, cfg: SiteRuntimeConfig) -> ExecResult:
         render = self.install_dir / "render_site_config.sh"
         if not render.exists():
             # Fallback: write conf directly without shell helper
