@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -21,6 +22,42 @@ SYNC_AUDIT_COMMAND = "sudo /opt/webshell_monitor/manage_sites.sh sync-audit"
 CHECK_AUDIT_COMMAND = "sudo auditctl -l | grep webshell"
 _STATUS_CACHE = {}
 _STATUS_TTL = 5.0
+
+
+def _conf_value(text: str, key: str) -> str:
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        name, value = stripped.split("=", 1)
+        if name.strip() != key:
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        return value
+    return ""
+
+
+def _backup_key(file_path: str, watch_dirs: List[str], project_dir: str) -> str:
+    """Match webshell_monitor.sh backup_key_for_file."""
+    best_len = 0
+    best_root = ""
+    for root in watch_dirs:
+        root = root.rstrip("/")
+        if file_path == root or file_path.startswith(root + "/"):
+            if len(root) > best_len:
+                best_len = len(root)
+                best_root = root
+    project = (project_dir or "").rstrip("/")
+    if best_root:
+        prefix = best_root + "/"
+        rel = file_path[len(prefix):] if file_path.startswith(prefix) else file_path
+    elif project and file_path.startswith(project + "/"):
+        rel = file_path[len(project) + 1:]
+    else:
+        rel = os.path.basename(file_path)
+    return rel.replace("/", "__")
 
 
 def tail_n_lines(path, n=100):
@@ -97,21 +134,82 @@ class LocalSystemdExecutor(Executor):
             self.config_root / f"{site_id}.whitelist",
         ]
 
-    def _config_write_phase(self, phase: str, path: Path) -> None:
-        """Let the running self-guard accept one control-plane rewrite of path."""
-        script = self.install_dir / "webshell_monitor.sh"
-        if not script.is_file() or not (self.config_root / "controlplane.conf").is_file():
+    def _allow_config_write(self, path: Path) -> None:
+        """Same stamp the running monitor checks before it treats a write as tampering."""
+        digest = hashlib.sha256(str(path).encode()).hexdigest()
+        directory = Path(os.environ.get(
+            "WEBSHELL_CONFIG_WRITE_DIR",
+            "/run/webshell-monitor/config-writes",
+        ))
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / digest).write_text(str(path) + "\n", encoding="utf-8")
+
+    def _file_is_immutable(self, path: Path) -> bool:
+        if not path.is_file():
+            return False
+        lsattr = shutil.which("lsattr")
+        if not lsattr:
+            return False
+        try:
+            proc = subprocess.run(
+                [lsattr, "-d", str(path)],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+        except Exception:  # noqa: BLE001
+            return False
+        flags = (proc.stdout or "").split()
+        return bool(flags) and "i" in flags[0]
+
+    def _chattr(self, path: Path, flag: str) -> None:
+        if not path.is_file():
+            return
+        chattr = shutil.which("chattr")
+        if not chattr:
             return
         try:
             subprocess.run(
-                [str(script), "--site", "controlplane", f"--{phase}-config-write", str(path)],
+                [chattr, flag, str(path)],
                 capture_output=True,
                 text=True,
-                timeout=30,
+                timeout=10,
                 check=False,
             )
         except Exception:  # noqa: BLE001
             return
+
+    def _controlplane_backup_for(self, path: Path) -> Optional[Path]:
+        conf = self.config_root / "controlplane.conf"
+        if not conf.is_file():
+            return None
+        text = conf.read_text(encoding="utf-8", errors="replace")
+        backup_dir = _conf_value(text, "BACKUP_DIR")
+        project_dir = _conf_value(text, "PROJECT_DIR")
+        watch_file = _conf_value(text, "WATCH_DIRS_FILE")
+        if not backup_dir:
+            return None
+        watch_dirs = []
+        watch_path = Path(watch_file) if watch_file else None
+        if watch_path and watch_path.is_file():
+            for line in watch_path.read_text(encoding="utf-8", errors="replace").splitlines():
+                line = line.strip()
+                if line and not line.startswith("#") and Path(line).is_dir():
+                    watch_dirs.append(line)
+        key = _backup_key(str(path), watch_dirs, project_dir)
+        if not key:
+            return None
+        return Path(backup_dir) / f"{key}.backup"
+
+    def _refresh_controlplane_backup(self, path: Path) -> None:
+        if not path.is_file():
+            return
+        dest = self._controlplane_backup_for(path)
+        if dest is None:
+            return
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(path, dest)
 
     def write_config(self, cfg: SiteRuntimeConfig) -> ExecResult:
         if not SITE_ID_RE.match(cfg.site_id):
@@ -119,15 +217,28 @@ class LocalSystemdExecutor(Executor):
 
         self.config_root.mkdir(parents=True, exist_ok=True)
         targets = self._config_write_targets(cfg.site_id)
-        if not self.dry_run:
+        locked = []
+        if not self.dry_run and (self.config_root / "controlplane.conf").is_file():
             for path in targets:
-                self._config_write_phase("prepare", path)
+                try:
+                    was_locked = self._file_is_immutable(path)
+                    self._allow_config_write(path)
+                    if was_locked:
+                        self._chattr(path, "-i")
+                    locked.append(was_locked)
+                except Exception:  # noqa: BLE001
+                    locked.append(False)
         try:
             return self._write_config_unlocked(cfg)
         finally:
-            if not self.dry_run:
-                for path in targets:
-                    self._config_write_phase("finish", path)
+            if locked:
+                for path, was_locked in zip(targets, locked):
+                    try:
+                        self._refresh_controlplane_backup(path)
+                        if was_locked:
+                            self._chattr(path, "+i")
+                    except Exception:  # noqa: BLE001
+                        continue
 
     def _write_config_unlocked(self, cfg: SiteRuntimeConfig) -> ExecResult:
         render = self.install_dir / "render_site_config.sh"
@@ -324,13 +435,18 @@ class LocalSystemdExecutor(Executor):
             if not p.is_file():
                 lines.append(f"跳过（不存在） {path}")
                 continue
-            proc = subprocess.run(
-                [chattr, flag, str(p)],
-                capture_output=True,
-                text=True,
-                timeout=10,
-                check=False,
-            )
+            try:
+                proc = subprocess.run(
+                    [chattr, flag, str(p)],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    check=False,
+                )
+            except Exception as exc:  # noqa: BLE001
+                fail_n += 1
+                lines.append(f"失败  {path}  {exc}")
+                continue
             if proc.returncode == 0:
                 ok_n += 1
                 lines.append(f"{'已锁定' if lock else '已解锁'}  {path}")

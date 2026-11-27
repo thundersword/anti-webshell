@@ -221,7 +221,9 @@ export default {
         ElMessage.success('防护策略已保存')
         loadProtect()
       } catch (error) {
-        ElMessage.error('保存失败')
+        const data = error.response && error.response.data
+        const message = (data && (data.error || data.message)) || '保存失败'
+        ElMessage.error(message)
       }
     }
 

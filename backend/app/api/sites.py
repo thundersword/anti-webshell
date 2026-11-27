@@ -155,8 +155,16 @@ def update_site(site_id):
         site.alert_email = values["alert_email"]
         site.wechat_webhook = values["wechat_webhook"]
         site.dingtalk_webhook = values["dingtalk_webhook"]
-    db.session.commit()
-    ok, msg = sync_site(site, restart=True)
+    try:
+        db.session.commit()
+    except Exception as exc:  # noqa: BLE001
+        db.session.rollback()
+        return jsonify(error=f"保存失败: {exc}"), 500
+    try:
+        ok, msg = sync_site(site, restart=True)
+    except Exception as exc:  # noqa: BLE001
+        db.session.rollback()
+        return jsonify(error=f"同步站点配置失败: {exc}"), 500
     payload = site.to_dict(include_lists=True)
     payload.update({"sync_ok": ok, "sync_message": msg})
     return jsonify(payload)

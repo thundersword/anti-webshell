@@ -472,6 +472,54 @@ def test_audit_status_dry_run_commands(client, tmp_path):
     assert body["rules_loaded"] is False
 
 
+def test_write_config_refreshes_controlplane_backup(tmp_path, monkeypatch):
+    project = tmp_path / "web"
+    project.mkdir()
+    config_root = tmp_path / "sites"
+    config_root.mkdir()
+    backup = tmp_path / "backup"
+    watch = tmp_path / "watch"
+    watch.write_text(str(config_root) + "\n", encoding="utf-8")
+    (config_root / "controlplane.conf").write_text(
+        "\n".join([
+            'SITE_ID="controlplane"',
+            f'PROJECT_DIR="{project}"',
+            f'BACKUP_DIR="{backup}"',
+            f'WATCH_DIRS_FILE="{watch}"',
+            'LOCK_CRITICAL_FILES="true"',
+            "",
+        ]),
+        encoding="utf-8",
+    )
+    stamps = tmp_path / "stamps"
+    monkeypatch.setenv("WEBSHELL_CONFIG_WRITE_DIR", str(stamps))
+    from app.executor.base import SiteRuntimeConfig
+    from app.executor.local import LocalSystemdExecutor
+
+    scripts = Path(__file__).resolve().parents[2] / "scripts"
+    executor = LocalSystemdExecutor(
+        install_dir=str(scripts),
+        config_root=str(config_root),
+        dry_run=False,
+    )
+    result = executor.write_config(SiteRuntimeConfig(
+        site_id="blog",
+        project_dir=str(project),
+        profile="plain_php",
+        access_log="/var/log/nginx/blog.log",
+        site_hosts="blog.example",
+        critical_files=[],
+        whitelist_dirs=[],
+    ))
+    assert result.ok, result.stderr or result.message
+    conf = (config_root / "blog.conf").read_text(encoding="utf-8")
+    assert 'ACCESS_LOG="/var/log/nginx/blog.log"' in conf
+    assert 'SITE_HOSTS="blog.example"' in conf
+    backed = (backup / "blog.conf.backup").read_text(encoding="utf-8")
+    assert 'ACCESS_LOG="/var/log/nginx/blog.log"' in backed
+    assert any(stamps.iterdir())
+
+
 def test_manual_investigate_from_create_event(client, tmp_path):
     headers = _login(client)
     project = tmp_path / "web"
