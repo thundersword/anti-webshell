@@ -248,3 +248,28 @@ def test_rotated_gap_only_when_earliest_line_misses_lookback(tmp_path, monkeypat
     # Earliest line is after T-30min, so the retained file does not cover the window.
     missed = _timeline_for_access_file(tmp_path / "missed", T - timedelta(minutes=10))
     assert "未读取已轮转日志" in missed["gaps"]
+
+
+def test_whitelist_track_summary_is_not_a_quarantine():
+    data = anchor()
+    data["reason"] = "白名单追踪"
+    data["file_path"] = "/www/wwwroot/blog/public/uploads/a.jpg"
+    data["quarantine_path"] = data["file_path"]
+    timeline = investigate(data, {"audit": "", "access": "", "auth": ""})
+    summaries = [
+        event["summary"]
+        for event in timeline["events"]
+        if event["kind"] == "quarantine"
+    ]
+    assert summaries == ["白名单追踪 /www/wwwroot/blog/public/uploads/a.jpg"]
+
+    manual = anchor()
+    manual["reason"] = "手动追踪"
+    manual["quarantine_path"] = manual["file_path"]
+    manual_timeline = investigate(manual, {"audit": "", "access": "", "auth": ""})
+    manual_summaries = [
+        event["summary"]
+        for event in manual_timeline["events"]
+        if event["kind"] == "quarantine"
+    ]
+    assert manual_summaries == ["手动追踪 /www/wwwroot/blog/public/x.php"]

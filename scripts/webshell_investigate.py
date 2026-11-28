@@ -720,6 +720,8 @@ def _events(anchor, rows, record, auth_rows, chosen, write_at, quarantine, file_
     reason = anchor.get("reason") or "隔离"
     if reason == "手动追踪":
         summary = f"手动追踪 {file_path}"
+    elif reason == "白名单追踪":
+        summary = f"白名单追踪 {file_path}"
     else:
         summary = f"隔离 {file_path} {reason}".strip()
     events.append({
