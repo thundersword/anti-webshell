@@ -66,6 +66,8 @@ def _ingest_from_log(site: Site, limit: int = 200, force: bool = False):
         # Order matters: 「监控目录新增可疑文件」 contains both substrings.
         elif "可疑文件" in msg:
             event_type = "suspicious_create"
+        elif "白名单新增文件" in msg:
+            event_type = "file_create"
         elif "监控目录新增文件" in msg:
             event_type = "file_create"
         if ":" in msg:

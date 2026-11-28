@@ -602,3 +602,34 @@ def test_track_whitelist_roundtrip(client, tmp_path):
     assert renamed.status_code == 200
     assert renamed.get_json()["track_whitelist"] is True
     assert 'TRACK_WHITELIST="true"' in conf.read_text(encoding="utf-8")
+
+
+def test_whitelist_track_log_is_file_create_with_incident(client, tmp_path):
+    headers = _login(client)
+    project = tmp_path / "web"
+    project.mkdir()
+    client.post("/api/sites", headers=headers, json={
+        "site_id": "wlist",
+        "name": "Wlist",
+        "project_dir": str(project),
+        "profile": "plain_php",
+        "start": False,
+    })
+    log = tmp_path / "wlist.log"
+    from datetime import datetime
+    created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    log.write_text(
+        f"[{created_at}] [WARNING] [site=wlist] "
+        "白名单新增文件: /www/wwwroot/blog/public/uploads/a.jpg "
+        "incident=20261128T031800Z_aabbccdd\n",
+        encoding="utf-8",
+    )
+    conf = Path(os.environ["WEBSHELL_CONFIG_ROOT"]) / "wlist.conf"
+    conf.write_text(conf.read_text(encoding="utf-8") + f'LOG_FILE="{log}"\n', encoding="utf-8")
+    listed = client.get("/api/events/?site_id=wlist", headers=headers)
+    events = listed.get_json()["events"]
+    created = next((e for e in events if "白名单新增文件" in (e.get("message") or "")), None)
+    assert created is not None, [(e.get("event_type"), e.get("message")) for e in events]
+    assert created["event_type"] == "file_create"
+    assert created["file_path"] == "/www/wwwroot/blog/public/uploads/a.jpg"
+    assert created["incident_id"] == "20261128T031800Z_aabbccdd"
