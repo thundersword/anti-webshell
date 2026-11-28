@@ -42,6 +42,7 @@ INOTIFY_PIDS=()
 INOTIFY_FIFO=""
 PRINT_WATCH_DIRS=0
 SELF_TEST_CREATE_ALERT=0
+SELF_TEST_WHITELIST_TRACK=0
 SELF_TEST_INVESTIGATE=0
 SEND_ALERT_FILE=""
 INCIDENT_ID=""
@@ -697,6 +698,13 @@ handle_create() {
         return 0
     fi
     if is_whitelisted "$file"; then
+        if [ "${TRACK_WHITELIST:-false}" = "true" ]; then
+            local incident_id event_time
+            incident_id=$(incident_id_for "$file")
+            event_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+            log_message "WARNING" "白名单新增文件: $file incident=$incident_id"
+            launch_investigation "$file" "$file" "白名单追踪" "$incident_id" "$event_time" || true
+        fi
         return 0
     fi
 
@@ -1210,6 +1218,120 @@ run_self_test_create_alert() {
     return 0
 }
 
+run_self_test_whitelist_track() {
+    local tmp file noisy incident anchor_path before after
+    tmp=$(mktemp -d)
+    SITE_ID="wtrack"
+    PROJECT_DIR="$tmp/site"
+    LOG_FILE="$tmp/monitor.log"
+    LOG_RELAXED=1
+    QUARANTINE_DIR="$tmp/quarantine"
+    BACKUP_DIR="$tmp/backup"
+    mkdir -p "$PROJECT_DIR/uploads/storage/logs" "$QUARANTINE_DIR" "$tmp/incidents"
+    touch "$LOG_FILE"
+    WHITELIST_DIRS=("$PROJECT_DIR/uploads")
+    TRACK_WHITELIST="false"
+    WEBSHELL_INVESTIGATE_DRY_RUN=1
+    WEBSHELL_INCIDENTS_DIR="$tmp/incidents"
+    WEBSHELL_INVESTIGATE_COMMAND_LOG="$tmp/commands.log"
+    WEBSHELL_INVESTIGATE_CONF="$tmp/missing-investigate.conf"
+    : >"$WEBSHELL_INVESTIGATE_COMMAND_LOG"
+
+    file="$PROJECT_DIR/uploads/a.jpg"
+    printf 'x\n' >"$file"
+
+    fail() {
+        echo "FAIL: $1" >&2
+        rm -rf "$tmp"
+        return 1
+    }
+
+    handle_create "$file"
+    if grep -q "白名单新增文件" "$LOG_FILE"; then
+        fail "switch off logged a whitelist track"
+        return 1
+    fi
+    find "$tmp/incidents" -name '*.anchor.json' >"$tmp/anchors.txt"
+    if [ -s "$tmp/anchors.txt" ]; then
+        fail "switch off wrote an anchor"
+        return 1
+    fi
+
+    : >"$LOG_FILE"
+    unset TRACK_WHITELIST
+    handle_create "$file"
+    if grep -q "白名单新增文件" "$LOG_FILE"; then
+        fail "missing TRACK_WHITELIST logged a whitelist track"
+        return 1
+    fi
+
+    : >"$LOG_FILE"
+    TRACK_WHITELIST="yes"
+    handle_create "$file"
+    if grep -q "白名单新增文件" "$LOG_FILE"; then
+        fail "TRACK_WHITELIST=yes logged a whitelist track"
+        return 1
+    fi
+
+    : >"$LOG_FILE"
+    TRACK_WHITELIST="true"
+    handle_create "$file"
+    if ! grep -q "白名单新增文件: $file incident=" "$LOG_FILE"; then
+        fail "switch on missing whitelist log"
+        return 1
+    fi
+    if grep -q "监控目录新增文件" "$LOG_FILE"; then
+        fail "whitelist track wrote the ordinary create log"
+        return 1
+    fi
+    if [ ! -f "$file" ]; then
+        fail "whitelist track removed the file"
+        return 1
+    fi
+    incident=$(sed -n 's/.*incident=//p' "$LOG_FILE" | head -n 1)
+    anchor_path="$WEBSHELL_INCIDENTS_DIR/$SITE_ID/${incident}.anchor.json"
+    if [ ! -f "$anchor_path" ]; then
+        fail "missing anchor $anchor_path"
+        return 1
+    fi
+    python3 - "$anchor_path" "$file" << 'PY'
+import json, sys
+anchor = json.load(open(sys.argv[1], encoding="utf-8"))
+assert anchor["file_path"] == sys.argv[2]
+assert anchor["quarantine_path"] == sys.argv[2]
+assert anchor["reason"] == "白名单追踪"
+assert str(anchor["event_time"]).endswith("Z")
+PY
+    if [ "$?" -ne 0 ]; then
+        fail "anchor fields mismatch"
+        return 1
+    fi
+    if grep -q 'systemd-run' "$WEBSHELL_INVESTIGATE_COMMAND_LOG"; then
+        fail "dry-run called systemd-run"
+        return 1
+    fi
+    if ! grep -q 'dry-run' "$WEBSHELL_INVESTIGATE_COMMAND_LOG"; then
+        fail "dry-run command was not recorded"
+        return 1
+    fi
+
+    find "$tmp/incidents" -name '*.anchor.json' >"$tmp/anchors.txt"
+    before=$(wc -l < "$tmp/anchors.txt" | tr -d ' ')
+    noisy="$PROJECT_DIR/uploads/storage/logs/app.log"
+    printf 'n\n' >"$noisy"
+    handle_create "$noisy"
+    find "$tmp/incidents" -name '*.anchor.json' >"$tmp/anchors.txt"
+    after=$(wc -l < "$tmp/anchors.txt" | tr -d ' ')
+    if [ "$before" != "1" ] || [ "$after" != "$before" ]; then
+        fail "noisy path changed anchor count from $before to $after"
+        return 1
+    fi
+
+    rm -rf "$tmp"
+    echo "OK"
+    return 0
+}
+
 anchor_for() {
     python3 - "$1" "$2" << 'PY'
 import json
@@ -1441,6 +1563,7 @@ Webshell监控脚本（多站点）
   $0 --watch-file <列表文件>     覆盖 WATCH_DIRS_FILE（与 --print-watch-dirs 联用）
   $0 --project-dir <目录>        覆盖 PROJECT_DIR（与 --print-watch-dirs 联用）
   $0 --self-test-create-alert    新建文件告警逻辑自检（供 scripts/tests 使用）
+  $0 --self-test-whitelist-track  白名单新文件追踪自检（供 scripts/tests 使用）
   $0 --self-test-investigate     隔离后入侵分析启动自检（供 scripts/tests 使用）
 
 配置目录: $CONFIG_ROOT/<site_id>.conf
@@ -1519,6 +1642,10 @@ while [[ $# -gt 0 ]]; do
             SELF_TEST_CREATE_ALERT=1
             shift
             ;;
+        --self-test-whitelist-track)
+            SELF_TEST_WHITELIST_TRACK=1
+            shift
+            ;;
         --self-test-investigate)
             SELF_TEST_INVESTIGATE=1
             shift
@@ -1573,6 +1700,12 @@ fi
 if [ "${SELF_TEST_CREATE_ALERT:-0}" = "1" ]; then
     set +e
     run_self_test_create_alert
+    exit $?
+fi
+
+if [ "${SELF_TEST_WHITELIST_TRACK:-0}" = "1" ]; then
+    set +e
+    run_self_test_whitelist_track
     exit $?
 fi
 
