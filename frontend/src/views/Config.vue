@@ -74,6 +74,10 @@
               <el-switch v-model="protect.lock_critical_files" @change="saveProtect" />
               <span class="hint">chattr +i，Web 进程无法改写（发版前请先解锁）</span>
             </el-form-item>
+            <el-form-item label="追踪白名单文件">
+              <el-switch v-model="protect.track_whitelist" @change="saveProtect" />
+              <span class="hint">白名单目录里的新文件按出现时间做入侵时间线并告警，文件不隔离</span>
+            </el-form-item>
             <el-form-item label="访问日志">
               <el-input v-model="protect.access_log" :disabled="!protectLoaded" />
             </el-form-item>
@@ -116,6 +120,7 @@ export default {
     const protect = ref({
       auto_restore: true,
       lock_critical_files: true,
+      track_whitelist: false,
       access_log: '',
       site_hosts: ''
     })
@@ -192,6 +197,7 @@ export default {
         const data = await api.get(`/sites/${currentSiteId.value}`)
         protect.value.auto_restore = !!data.auto_restore
         protect.value.lock_critical_files = data.lock_critical_files !== false
+        protect.value.track_whitelist = !!data.track_whitelist
         protect.value.access_log = data.access_log || ''
         protect.value.site_hosts = data.site_hosts || ''
         protectLoaded.value = true
@@ -207,7 +213,8 @@ export default {
       try {
         const payload = {
           auto_restore: protect.value.auto_restore,
-          lock_critical_files: protect.value.lock_critical_files
+          lock_critical_files: protect.value.lock_critical_files,
+          track_whitelist: protect.value.track_whitelist
         }
         if (protectLoaded.value) {
           payload.access_log = protect.value.access_log
