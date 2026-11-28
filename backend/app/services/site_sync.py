@@ -16,6 +16,7 @@ def build_runtime_config(site: Site) -> SiteRuntimeConfig:
         profile=site.profile,
         auto_restore=bool(site.auto_restore),
         lock_critical_files=bool(getattr(site, "lock_critical_files", True)),
+        track_whitelist=bool(getattr(site, "track_whitelist", False)),
         alert_email=site.alert_email or "",
         wechat_webhook=site.wechat_webhook or "",
         dingtalk_webhook=site.dingtalk_webhook or "",

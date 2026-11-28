@@ -11,6 +11,7 @@
 #   --dingtalk-webhook URL
 #   --auto-restore true|false
 #   --lock-critical true|false
+#   --track-whitelist true|false
 #   --output-dir DIR
 #   --critical-file PATH   (repeatable)
 #   --whitelist-dir PATH   (repeatable)
@@ -34,6 +35,7 @@ ACCESS_LOG=""
 SITE_HOSTS=""
 AUTO_RESTORE="true"
 LOCK_CRITICAL_FILES="true"
+TRACK_WHITELIST="false"
 USE_PROFILE_DEFAULTS=1
 EXTRA_CRITICAL=()
 EXTRA_WHITELIST=()
@@ -51,6 +53,7 @@ Options:
   --site-hosts HOSTS
   --auto-restore true|false
   --lock-critical true|false
+  --track-whitelist true|false
   --output-dir DIR
   --critical-file PATH
   --whitelist-dir PATH
@@ -82,6 +85,7 @@ while [[ $# -gt 0 ]]; do
         --site-hosts) SITE_HOSTS="$2"; shift 2 ;;
         --auto-restore) AUTO_RESTORE="$2"; shift 2 ;;
         --lock-critical) LOCK_CRITICAL_FILES="$2"; shift 2 ;;
+        --track-whitelist) TRACK_WHITELIST="$2"; shift 2 ;;
         --output-dir) OUTPUT_DIR="$2"; shift 2 ;;
         --critical-file) EXTRA_CRITICAL+=("$2"); shift 2 ;;
         --whitelist-dir) EXTRA_WHITELIST+=("$2"); shift 2 ;;
@@ -175,6 +179,7 @@ QUARANTINE_DIR="$QUARANTINE_ROOT/$SITE_ID"
 BACKUP_DIR="$BACKUP_ROOT/$SITE_ID"
 AUTO_RESTORE="$AUTO_RESTORE"
 LOCK_CRITICAL_FILES="$LOCK_CRITICAL_FILES"
+TRACK_WHITELIST="$TRACK_WHITELIST"
 ALERT_EMAIL="$ALERT_EMAIL"
 WECHAT_WEBHOOK="$WECHAT_WEBHOOK"
 DINGTALK_WEBHOOK="$DINGTALK_WEBHOOK"

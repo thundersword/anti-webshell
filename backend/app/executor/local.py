@@ -257,6 +257,8 @@ class LocalSystemdExecutor(Executor):
             "true" if cfg.auto_restore else "false",
             "--lock-critical",
             "true" if cfg.lock_critical_files else "false",
+            "--track-whitelist",
+            "true" if cfg.track_whitelist else "false",
             "--no-profile-defaults",
         ]
         if cfg.alert_email:
@@ -329,6 +331,7 @@ class LocalSystemdExecutor(Executor):
                     f'BACKUP_DIR="/var/webshell_backup/{cfg.site_id}"',
                     f'AUTO_RESTORE="{"true" if cfg.auto_restore else "false"}"',
                     f'LOCK_CRITICAL_FILES="{"true" if cfg.lock_critical_files else "false"}"',
+                    f'TRACK_WHITELIST="{"true" if cfg.track_whitelist else "false"}"',
                     f'ALERT_EMAIL="{cfg.alert_email or ""}"',
                     f'WECHAT_WEBHOOK="{cfg.wechat_webhook or ""}"',
                     f'DINGTALK_WEBHOOK="{cfg.dingtalk_webhook or ""}"',

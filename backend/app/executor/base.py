@@ -18,6 +18,7 @@ class SiteRuntimeConfig:
     profile: str = "thinkphp"
     auto_restore: bool = True
     lock_critical_files: bool = True
+    track_whitelist: bool = False
     alert_email: str = ""
     wechat_webhook: str = ""
     dingtalk_webhook: str = ""

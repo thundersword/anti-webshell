@@ -61,6 +61,10 @@ def _ensure_schema():
                 statements.append(
                     "ALTER TABLE sites ADD COLUMN lock_critical_files BOOLEAN DEFAULT 1"
                 )
+            if "track_whitelist" not in cols:
+                statements.append(
+                    "ALTER TABLE sites ADD COLUMN track_whitelist BOOLEAN DEFAULT 0"
+                )
             if "access_log" not in cols:
                 statements.append("ALTER TABLE sites ADD COLUMN access_log VARCHAR(500)")
             if "site_hosts" not in cols:

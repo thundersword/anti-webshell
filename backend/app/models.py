@@ -66,6 +66,7 @@ class Site(db.Model):
     node_id = db.Column(db.String(64), db.ForeignKey("nodes.id"), default="local")
     auto_restore = db.Column(db.Boolean, default=True)
     lock_critical_files = db.Column(db.Boolean, default=True)
+    track_whitelist = db.Column(db.Boolean, default=False)
     alert_email = db.Column(db.String(200))
     wechat_webhook = db.Column(db.String(500))
     dingtalk_webhook = db.Column(db.String(500))
@@ -94,6 +95,7 @@ class Site(db.Model):
             "node_id": self.node_id,
             "auto_restore": self.auto_restore,
             "lock_critical_files": bool(self.lock_critical_files),
+            "track_whitelist": bool(self.track_whitelist),
             "alert_email": self.alert_email,
             "wechat_webhook": self.wechat_webhook,
             "dingtalk_webhook": self.dingtalk_webhook,

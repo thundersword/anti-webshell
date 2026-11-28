@@ -18,4 +18,10 @@ PROFILES_DIR="$ROOT/scripts/profiles" \
   --output-dir "$TMP/out"
 grep -q 'ACCESS_LOG=""' "$TMP/out/blog.conf"
 grep -q 'SITE_HOSTS=""' "$TMP/out/blog.conf"
+grep -q 'TRACK_WHITELIST="false"' "$TMP/out/blog.conf"
+PROFILES_DIR="$ROOT/scripts/profiles" \
+  "$ROOT/scripts/render_site_config.sh" blog "$TMP/proj" plain_php \
+  --output-dir "$TMP/out" \
+  --track-whitelist true
+grep -q 'TRACK_WHITELIST="true"' "$TMP/out/blog.conf"
 echo OK

@@ -571,3 +571,34 @@ def test_manual_investigate_from_create_event(client, tmp_path):
         json={"quarantine": False},
     )
     assert refused.status_code == 400
+
+
+def test_track_whitelist_roundtrip(client, tmp_path):
+    headers = _login(client)
+    project = tmp_path / "web"
+    project.mkdir()
+    created = client.post("/api/sites", headers=headers, json={
+        "site_id": "blog",
+        "name": "Blog",
+        "project_dir": str(project),
+        "profile": "plain_php",
+        "start": False,
+    })
+    assert created.status_code == 201
+    assert created.get_json()["track_whitelist"] is False
+    conf = Path(os.environ["WEBSHELL_CONFIG_ROOT"]) / "blog.conf"
+    assert 'TRACK_WHITELIST="false"' in conf.read_text(encoding="utf-8")
+
+    updated = client.put("/api/sites/blog", headers=headers, json={
+        "track_whitelist": True,
+    })
+    assert updated.status_code == 200
+    assert updated.get_json()["track_whitelist"] is True
+    assert 'TRACK_WHITELIST="true"' in conf.read_text(encoding="utf-8")
+
+    renamed = client.put("/api/sites/blog", headers=headers, json={
+        "name": "Blog 2",
+    })
+    assert renamed.status_code == 200
+    assert renamed.get_json()["track_whitelist"] is True
+    assert 'TRACK_WHITELIST="true"' in conf.read_text(encoding="utf-8")

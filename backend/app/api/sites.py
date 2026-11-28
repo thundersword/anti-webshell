@@ -79,6 +79,7 @@ def create_site():
         node_id=node_id,
         auto_restore=bool(data.get("auto_restore", True)),
         lock_critical_files=bool(data.get("lock_critical_files", True)),
+        track_whitelist=bool(data.get("track_whitelist", False)),
         alert_email=data.get("alert_email"),
         wechat_webhook=data.get("wechat_webhook"),
         dingtalk_webhook=data.get("dingtalk_webhook"),
@@ -144,6 +145,8 @@ def update_site(site_id):
         site.auto_restore = bool(data["auto_restore"])
     if "lock_critical_files" in data:
         site.lock_critical_files = bool(data["lock_critical_files"])
+    if "track_whitelist" in data:
+        site.track_whitelist = bool(data["track_whitelist"])
     if "enabled" in data:
         site.enabled = bool(data["enabled"])
     if access_log is not None:
